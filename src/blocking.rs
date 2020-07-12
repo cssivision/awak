@@ -2,8 +2,7 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use parking::Parker;
-use pin_utils::pin_mut;
+use crate::parking::Parker;
 use waker_fn::waker_fn;
 
 fn parker_and_waker() -> (Parker, Waker) {
