@@ -3,7 +3,7 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use crate::parking::Parker;
-use waker_fn::waker_fn;
+use crate::waker_fn::waker_fn;
 
 fn parker_and_waker() -> (Parker, Waker) {
     let parker = Parker::new();

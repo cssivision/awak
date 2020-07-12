@@ -9,6 +9,8 @@ use crossbeam::channel;
 use futures::channel::oneshot;
 use once_cell::sync::Lazy;
 
+use crate::waker_fn::waker_fn;
+
 /// A queue that holds scheduled tasks.
 static QUEUE: Lazy<channel::Sender<Arc<Task>>> = Lazy::new(|| {
     // Create a queue.
@@ -65,7 +67,7 @@ impl Task {
 
         // Create a waker that schedules the task.
         let task = self.clone();
-        let waker = waker_fn::waker_fn(move || {
+        let waker = waker_fn(move || {
             if task.state.fetch_or(WOKEN, Ordering::SeqCst) == 0 {
                 QUEUE.send(task.clone()).unwrap();
             }
