@@ -97,7 +97,7 @@ impl Inner {
                 // Wait with a timeout, and if we spuriously wake up or otherwise wake up from a
                 // notification we just want to unconditionally set `state` back to `EMPTY`, either
                 // consuming a notification or un-flagging ourselves as parked.
-                let _ = self.cvar.wait_timeout(m, d).unwrap();
+                let (_m, _result) = self.cvar.wait_timeout(m, d).unwrap();
 
                 match self.state.swap(EMPTY, SeqCst) {
                     NOTIFIED => true, // got a notification
