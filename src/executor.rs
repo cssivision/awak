@@ -39,6 +39,7 @@ impl Executor {
 
         let schedule = move |runnable| {
             global.queue.push(runnable).unwrap();
+            global.notify();
         };
 
         let (runnable, handle) = async_task::spawn(future, schedule, ());
