@@ -2,15 +2,7 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use crate::parking::Parker;
-use crate::waker_fn::waker_fn;
-
-fn parker_and_waker() -> (Parker, Waker) {
-    let parker = Parker::new();
-    let unparker = parker.unparker();
-    let waker = waker_fn(move || unparker.unpark());
-    (parker, waker)
-}
+use crate::parking::{pair, Parker};
 
 /// Runs a future to completion on the current thread.
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -18,7 +10,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
     thread_local! {
         // Cached parker and waker for efficiency.
-        static CACHE: RefCell<(Parker, Waker)> = RefCell::new(parker_and_waker());
+        static CACHE: RefCell<(Parker, Waker)> = RefCell::new(pair());
     }
 
     CACHE.with(|cache| match cache.try_borrow_mut() {
@@ -34,7 +26,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
             }
         }
         Err(_) => {
-            let (parker, waker) = parker_and_waker();
+            let (parker, waker) = pair();
 
             let cx = &mut Context::from_waker(&waker);
             loop {

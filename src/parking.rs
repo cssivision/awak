@@ -1,6 +1,16 @@
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::Waker;
 use std::time::Duration;
+
+use crate::waker_fn::waker_fn;
+
+pub fn pair() -> (Parker, Waker) {
+    let parker = Parker::new();
+    let unparker = parker.unparker();
+    let waker = waker_fn(move || unparker.unpark());
+    (parker, waker)
+}
 
 pub struct Parker {
     unparker: Unparker,
