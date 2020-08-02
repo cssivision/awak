@@ -13,6 +13,12 @@ pub struct Executor {
     global: Arc<Global>,
 }
 
+impl Default for Executor {
+    fn default() -> Executor {
+        Executor::new()
+    }
+}
+
 #[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
