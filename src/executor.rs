@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
+use std::panic::UnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -190,6 +191,8 @@ impl Global {
         }
     }
 }
+
+impl UnwindSafe for Ticker {}
 
 /// Runs tasks in a multi-threaded executor.
 #[derive(Debug)]

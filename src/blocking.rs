@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use crate::parking::{pair, Parker};
+use crate::parking::{parker_and_waker, Parker};
 
 /// Runs a future to completion on the current thread.
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -10,7 +10,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
     thread_local! {
         // Cached parker and waker for efficiency.
-        static CACHE: RefCell<(Parker, Waker)> = RefCell::new(pair());
+        static CACHE: RefCell<(Parker, Waker)> = RefCell::new(parker_and_waker());
     }
 
     CACHE.with(|cache| match cache.try_borrow_mut() {
@@ -26,7 +26,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
             }
         }
         Err(_) => {
-            let (parker, waker) = pair();
+            let (parker, waker) = parker_and_waker();
 
             let cx = &mut Context::from_waker(&waker);
             loop {

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::waker_fn::waker_fn;
 
-pub fn pair() -> (Parker, Waker) {
+pub fn parker_and_waker() -> (Parker, Waker) {
     let parker = Parker::new();
     let unparker = parker.unparker();
     let waker = waker_fn(move || unparker.unpark());
