@@ -98,8 +98,8 @@ impl Source {
                 }
             }
 
-            if w.readers.is_empty() {
-                // no readers, register in reactor
+            if w.writers.is_empty() {
+                // no writer, register in reactor
                 Reactor::get().interest(self.raw, self.key, !w.readers.is_empty(), true)?;
             }
 
