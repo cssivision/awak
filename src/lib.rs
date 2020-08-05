@@ -10,7 +10,7 @@ mod waker_fn;
 use std::thread;
 
 pub use blocking::block_on;
-use executor::Executor;
+pub use executor::Executor;
 
 use once_cell::sync::Lazy;
 
