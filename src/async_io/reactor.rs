@@ -5,10 +5,12 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::task::{Poll, Waker};
+use std::thread;
 
-use super::sys;
+use super::{parking, sys};
 
 use futures::future::poll_fn;
+use once_cell::sync::Lazy;
 use slab::Slab;
 
 pub struct Reactor {
@@ -18,12 +20,26 @@ pub struct Reactor {
 }
 
 impl Reactor {
-    pub fn get() -> Reactor {
-        Reactor {
-            ticker: AtomicUsize::new(0),
-            sys: sys::Reactor::new().expect("init reactor fail"),
-            sources: Mutex::new(Slab::new()),
-        }
+    pub fn get() -> &'static Reactor {
+        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
+            let (parker, unparker) = parking::pair();
+
+            thread::spawn(move || {
+                let reactor = Reactor::get();
+
+                loop {
+                    let tick = reactor.ticker.load(Ordering::SeqCst);
+                }
+            });
+
+            Reactor {
+                ticker: AtomicUsize::new(0),
+                sys: sys::Reactor::new().expect("init reactor fail"),
+                sources: Mutex::new(Slab::new()),
+            }
+        });
+
+        &REACTOR
     }
 
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {

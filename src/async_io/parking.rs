@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+pub static PARKER_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 pub fn pair() -> (Parker, Unparker) {
     let parker = Parker::new();
     let unparker = parker.unparker();
@@ -15,6 +17,7 @@ pub struct Parker {
 
 impl Parker {
     pub fn new() -> Parker {
+        PARKER_COUNT.fetch_add(1, SeqCst);
         Parker {
             unparker: Unparker {
                 inner: Arc::new(Inner {
