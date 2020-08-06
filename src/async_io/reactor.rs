@@ -45,6 +45,35 @@ impl Reactor {
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
         self.sys.interest(raw, key, read, write)
     }
+
+    pub fn insert_io(&self, raw: RawFd) -> io::Result<Arc<Source>> {
+        self.sys.insert(raw)?;
+
+        let mut sources = self.sources.lock().unwrap();
+        let entry = sources.vacant_entry();
+        let key = entry.key();
+
+        let source = Arc::new(Source {
+            raw,
+            key,
+            wakers: Mutex::new(Wakers {
+                readers: Vec::new(),
+                writers: Vec::new(),
+                tick_readable: 0,
+                tick_writeable: 0,
+            }),
+        });
+
+        entry.insert(source.clone());
+
+        Ok(source)
+    }
+
+    pub fn remove_io(&self, source: &Source) -> io::Result<()> {
+        let mut sources = self.sources.lock().unwrap();
+        sources.remove(source.key);
+        self.sys.remove(source.raw)
+    }
 }
 
 /// A registered source of I/O events.
