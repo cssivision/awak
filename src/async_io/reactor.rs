@@ -14,9 +14,11 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 
 pub struct Reactor {
+    unparker: parking::Unparker,
     ticker: AtomicUsize,
     sys: sys::Reactor,
     sources: Mutex<Slab<Arc<Source>>>,
+    events: Mutex<sys::Events>,
 }
 
 impl Reactor {
@@ -33,9 +35,11 @@ impl Reactor {
             });
 
             Reactor {
+                unparker,
                 ticker: AtomicUsize::new(0),
                 sys: sys::Reactor::new().expect("init reactor fail"),
                 sources: Mutex::new(Slab::new()),
+                events: Mutex::new(sys::Events::new()),
             }
         });
 
