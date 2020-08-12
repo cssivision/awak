@@ -9,6 +9,16 @@ macro_rules! syscall {
     }};
 }
 
+/// An event reported by epoll/kqueue/wepoll.
+pub struct Event {
+    /// Key passed when registering interest in the I/O handle.
+    pub key: usize,
+    /// Is the I/O handle readable?
+    pub readable: bool,
+    /// Is the I/O handle writable?
+    pub writable: bool,
+}
+
 mod epoll;
 
 pub use epoll::*;

@@ -4,6 +4,8 @@ use std::os::unix::io::RawFd;
 use std::ptr;
 use std::time::Duration;
 
+use super::Event;
+
 const NOTIFY_KEY: usize = usize::MAX;
 
 pub struct Reactor {
@@ -110,6 +112,16 @@ impl Reactor {
 
         Ok(events.len)
     }
+
+    pub fn notify(&self) -> io::Result<()> {
+        let buf: [u8; 8] = 1u64.to_ne_bytes();
+        let _ = syscall!(write(
+            self.event_fd,
+            &buf[0] as *const u8 as *const libc::c_void,
+            buf.len()
+        ));
+        Ok(())
+    }
 }
 
 impl Drop for Reactor {
@@ -133,5 +145,13 @@ impl Events {
         let list = vec![ev; 1000].into_boxed_slice();
         let len = 0;
         Events { list, len }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.list[..self.len].iter().map(|ev| Event {
+            key: ev.u64 as usize,
+            readable: (ev.events as libc::c_int & read_flags()) != 0,
+            writable: (ev.events as libc::c_int & write_flags()) != 0,
+        })
     }
 }
