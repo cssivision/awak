@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-pub static PARKER_COUNT: AtomicUsize = AtomicUsize::new(0);
+use crate::async_io::reactor::Reactor;
 
 pub fn pair() -> (Parker, Unparker) {
     let parker = Parker::new();
@@ -15,9 +15,15 @@ pub struct Parker {
     unparker: Unparker,
 }
 
+impl Drop for Parker {
+    fn drop(&mut self) {
+        Reactor::get().decrement_parkers();
+    }
+}
+
 impl Parker {
     pub fn new() -> Parker {
-        PARKER_COUNT.fetch_add(1, SeqCst);
+        Reactor::get().increment_parkers();
         Parker {
             unparker: Unparker {
                 inner: Arc::new(Inner {

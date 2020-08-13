@@ -14,6 +14,7 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 
 pub struct Reactor {
+    parker_count: AtomicUsize,
     unparker: parking::Unparker,
     ticker: AtomicUsize,
     sys: sys::Reactor,
@@ -31,10 +32,13 @@ impl Reactor {
 
                 loop {
                     let tick = reactor.ticker.load(Ordering::SeqCst);
+
+                    if reactor.parker_count.load(Ordering::SeqCst) > 0 {}
                 }
             });
 
             Reactor {
+                parker_count: AtomicUsize::new(0),
                 unparker,
                 ticker: AtomicUsize::new(0),
                 sys: sys::Reactor::new().expect("init reactor fail"),
@@ -44,6 +48,15 @@ impl Reactor {
         });
 
         &REACTOR
+    }
+
+    pub fn increment_parkers(&self) {
+        self.parker_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn decrement_parkers(&self) {
+        self.parker_count.fetch_sub(1, Ordering::SeqCst);
+        self.unparker.unpark();
     }
 
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
