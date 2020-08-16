@@ -1,13 +1,16 @@
 use std::io;
 use std::os::unix::io::RawFd;
+use std::panic;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, MutexGuard,
 };
 use std::task::{Poll, Waker};
 use std::thread;
+use std::time::Duration;
 
-use super::{parking, sys};
+use super::sys;
+use crate::parking;
 
 use futures::future::poll_fn;
 use once_cell::sync::Lazy;
@@ -22,6 +25,77 @@ pub struct Reactor {
     events: Mutex<sys::Events>,
 }
 
+/// A lock on the reactor.
+pub(crate) struct ReactorLock<'a> {
+    reactor: &'a Reactor,
+    events: MutexGuard<'a, sys::Events>,
+}
+
+impl ReactorLock<'_> {
+    pub(crate) fn react(mut self, timeout: Option<Duration>) -> io::Result<()> {
+        let mut wakers = Vec::new();
+
+        // Bump the ticker before polling I/O.
+        let tick = self
+            .reactor
+            .ticker
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+
+        let res = match self.reactor.sys.wait(&mut self.events, timeout) {
+            Ok(0) => Ok(()),
+
+            Ok(_) => {
+                let sources = self.reactor.sources.lock().unwrap();
+
+                for ev in self.events.iter() {
+                    if let Some(source) = sources.get(ev.key) {
+                        let mut w = source.wakers.lock().unwrap();
+
+                        // Wake readers if a readability event was emitted.
+                        if ev.readable {
+                            w.tick_readable = tick;
+                            wakers.append(&mut w.readers);
+                        }
+
+                        // Wake writers if a writability event was emitted.
+                        if ev.writable {
+                            w.tick_writable = tick;
+                            wakers.append(&mut w.writers);
+                        }
+
+                        if !(w.writers.is_empty() && w.readers.is_empty()) {
+                            self.reactor.sys.interest(
+                                source.raw,
+                                source.key,
+                                !w.readers.is_empty(),
+                                !w.writers.is_empty(),
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+
+            // The syscall was interrupted.
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
+
+            // An actual error occureed.
+            Err(err) => Err(err),
+        };
+
+        drop(self);
+
+        // Wake up ready tasks.
+        for waker in wakers {
+            // Don't let a panicking waker blow everything up.
+            let _ = panic::catch_unwind(|| waker.wake());
+        }
+
+        res
+    }
+}
+
 impl Reactor {
     pub fn get() -> &'static Reactor {
         static REACTOR: Lazy<Reactor> = Lazy::new(|| {
@@ -30,10 +104,38 @@ impl Reactor {
             thread::spawn(move || {
                 let reactor = Reactor::get();
 
+                // The last observed reactor tick.
+                let mut last_tick = 0;
+                // Number of sleeps since this thread has called `react()`.
+                let mut sleeps = 0u64;
+
                 loop {
                     let tick = reactor.ticker.load(Ordering::SeqCst);
 
-                    if reactor.parker_count.load(Ordering::SeqCst) > 0 {}
+                    if last_tick == tick {
+                        let reactor_lock = if sleeps >= 10 {
+                            // If no new ticks have occurred for a while, stop sleeping and
+                            // spinning in this loop and just block on the reactor lock.
+                            Some(Reactor::get().lock())
+                        } else {
+                            Reactor::get().try_lock()
+                        };
+
+                        if let Some(reactor_lock) = reactor_lock {
+                            let _ = reactor_lock.react(None);
+                            last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
+                            sleeps = 0;
+                        }
+                    } else {
+                        last_tick = tick;
+                    }
+
+                    if reactor.parker_count.load(Ordering::SeqCst) > 0 {
+                        // Exponential backoff from 50us to 10ms.
+                        let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
+                            .get(sleeps as usize)
+                            .unwrap_or(&10_000);
+                    }
                 }
             });
 
@@ -48,6 +150,20 @@ impl Reactor {
         });
 
         &REACTOR
+    }
+
+    fn lock(&self) -> ReactorLock<'_> {
+        let reactor = self;
+        let events = self.events.lock().unwrap();
+        ReactorLock { reactor, events }
+    }
+
+    /// Attempts to lock the reactor.
+    pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
+        self.events.try_lock().ok().map(|events| {
+            let reactor = self;
+            ReactorLock { reactor, events }
+        })
     }
 
     pub fn increment_parkers(&self) {
@@ -77,7 +193,7 @@ impl Reactor {
                 readers: Vec::new(),
                 writers: Vec::new(),
                 tick_readable: 0,
-                tick_writeable: 0,
+                tick_writable: 0,
             }),
         });
 
@@ -112,7 +228,7 @@ pub struct Wakers {
     writers: Vec<Waker>,
 
     tick_readable: usize,
-    tick_writeable: usize,
+    tick_writable: usize,
 }
 
 impl Source {
@@ -155,7 +271,7 @@ impl Source {
             let mut w = self.wakers.lock().unwrap();
 
             if let Some((a, b)) = ticks {
-                if w.tick_writeable != a && w.tick_writeable != b {
+                if w.tick_writable != a && w.tick_writable != b {
                     return Poll::Ready(Ok(()));
                 }
             }
@@ -172,7 +288,7 @@ impl Source {
             if ticks.is_none() {
                 ticks = Some((
                     Reactor::get().ticker.load(Ordering::SeqCst),
-                    w.tick_writeable,
+                    w.tick_writable,
                 ));
             }
             Poll::Pending

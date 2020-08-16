@@ -12,6 +12,12 @@ pub fn parker_and_waker() -> (Parker, Waker) {
     (parker, waker)
 }
 
+pub fn pair() -> (Parker, Unparker) {
+    let p = Parker::new();
+    let u = p.unparker();
+    (p, u)
+}
+
 pub struct Parker {
     unparker: Unparker,
 }
