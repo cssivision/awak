@@ -17,12 +17,17 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 
 pub struct Reactor {
-    parker_count: AtomicUsize,
     unparker: parking::Unparker,
     ticker: AtomicUsize,
     sys: sys::Reactor,
     sources: Mutex<Slab<Arc<Source>>>,
     events: Mutex<sys::Events>,
+}
+
+impl Drop for Reactor {
+    fn drop(&mut self) {
+        self.unparker.unpark();
+    }
 }
 
 /// A lock on the reactor.
@@ -145,7 +150,6 @@ impl Reactor {
             });
 
             Reactor {
-                parker_count: AtomicUsize::new(0),
                 unparker,
                 ticker: AtomicUsize::new(0),
                 sys: sys::Reactor::new().expect("init reactor fail"),
