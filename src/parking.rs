@@ -39,8 +39,8 @@ impl Parker {
         self.unparker.inner.park(None);
     }
 
-    pub fn park_timeout(&self, timeout: Option<Duration>) {
-        self.unparker.inner.park(timeout);
+    pub fn park_timeout(&self, timeout: Option<Duration>) -> bool {
+        self.unparker.inner.park(timeout)
     }
 
     pub fn unparker(&self) -> Unparker {

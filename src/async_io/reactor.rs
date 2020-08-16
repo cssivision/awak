@@ -130,11 +130,16 @@ impl Reactor {
                         last_tick = tick;
                     }
 
-                    if reactor.parker_count.load(Ordering::SeqCst) > 0 {
-                        // Exponential backoff from 50us to 10ms.
-                        let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
-                            .get(sleeps as usize)
-                            .unwrap_or(&10_000);
+                    // Exponential backoff from 50us to 10ms.
+                    let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
+                        .get(sleeps as usize)
+                        .unwrap_or(&10_000);
+
+                    if parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
+                        last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
+                        sleeps = 0;
+                    } else {
+                        sleeps += 1;
                     }
                 }
             });
@@ -164,15 +169,6 @@ impl Reactor {
             let reactor = self;
             ReactorLock { reactor, events }
         })
-    }
-
-    pub fn increment_parkers(&self) {
-        self.parker_count.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub fn decrement_parkers(&self) {
-        self.parker_count.fetch_sub(1, Ordering::SeqCst);
-        self.unparker.unpark();
     }
 
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
