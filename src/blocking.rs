@@ -21,7 +21,9 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
             loop {
                 match future.as_mut().poll(cx) {
                     Poll::Ready(output) => return output,
-                    Poll::Pending => parker.park(),
+                    Poll::Pending => {
+                        parker.park();
+                    }
                 }
             }
         }
@@ -32,7 +34,9 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
             loop {
                 match future.as_mut().poll(cx) {
                     Poll::Ready(output) => return output,
-                    Poll::Pending => parker.park(),
+                    Poll::Pending => {
+                        parker.park();
+                    }
                 }
             }
         }

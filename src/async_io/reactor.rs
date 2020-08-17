@@ -16,7 +16,7 @@ use futures::future::poll_fn;
 use once_cell::sync::Lazy;
 use slab::Slab;
 
-pub struct Reactor {
+pub(crate) struct Reactor {
     unparker: parking::Unparker,
     ticker: AtomicUsize,
     sys: sys::Reactor,
@@ -140,10 +140,7 @@ impl Reactor {
                         .get(sleeps as usize)
                         .unwrap_or(&10_000);
 
-                    if parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
-                        last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
-                        sleeps = 0;
-                    } else {
+                    if !parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
                         sleeps += 1;
                     }
                 }
@@ -159,6 +156,12 @@ impl Reactor {
         });
 
         &REACTOR
+    }
+
+    pub(crate) fn try_react() {
+        if let Some(reactor_lock) = Reactor::get().try_lock() {
+            let _ = reactor_lock.react(Some(Duration::from_secs(0)));
+        }
     }
 
     fn lock(&self) -> ReactorLock<'_> {
