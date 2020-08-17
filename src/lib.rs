@@ -8,7 +8,6 @@ mod task;
 mod waker_fn;
 
 use std::thread;
-use std::time::Duration;
 
 use async_io::reactor::Reactor;
 pub use blocking::block_on;
@@ -29,7 +28,6 @@ pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
                     }
                 }
 
-                p.park_timeout(Some(Duration::from_secs(0)));
                 Reactor::try_react();
             }
         });
