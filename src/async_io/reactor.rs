@@ -68,13 +68,7 @@ impl ReactorLock<'_> {
             .wrapping_add(1);
 
         let res = match self.reactor.sys.wait(&mut self.events, timeout) {
-            Ok(0) => {
-                if timeout != Some(Duration::from_secs(0)) {
-                    // The non-zero timeout was hit so fire ready timers.
-                    self.reactor.process_timers(&mut wakers);
-                }
-                Ok(())
-            }
+            Ok(0) => Ok(()),
 
             Ok(_) => {
                 let sources = self.reactor.sources.lock().unwrap();
@@ -114,6 +108,11 @@ impl ReactorLock<'_> {
             // An actual error occureed.
             Err(err) => Err(err),
         };
+
+        if timeout != Some(Duration::from_secs(0)) {
+            // The non-zero timeout was hit so fire ready timers.
+            self.reactor.process_timers(&mut wakers);
+        }
 
         drop(self);
 
