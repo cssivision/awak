@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::io;
 use std::os::unix::io::RawFd;
 use std::ptr;
@@ -11,7 +10,15 @@ const NOTIFY_KEY: usize = usize::MAX;
 pub struct Reactor {
     epoll_fd: RawFd,
     event_fd: RawFd,
+    /// File descriptor for the timerfd that produces timeouts.
+    timer_fd: RawFd,
 }
+
+/// `timespec` value that equals zero.
+const TS_ZERO: libc::timespec = libc::timespec {
+    tv_sec: 0,
+    tv_nsec: 0,
+};
 
 /// Epoll flags for all possible readability events.
 fn read_flags() -> libc::c_int {
@@ -30,10 +37,22 @@ impl Reactor {
         syscall!(fcntl(epoll_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC))?;
 
         let event_fd = syscall!(eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK))?;
+        let timer_fd = syscall!(timerfd_create(
+            libc::CLOCK_MONOTONIC,
+            libc::TFD_CLOEXEC | libc::TFD_NONBLOCK
+        ))?;
 
-        let reactor = Reactor { epoll_fd, event_fd };
+        let reactor = Reactor {
+            epoll_fd,
+            event_fd,
+            timer_fd,
+        };
 
         reactor.insert(event_fd)?;
+        reactor.insert(timer_fd)?;
+
+        reactor.interest(event_fd, NOTIFY_KEY, true, false)?;
+
         Ok(reactor)
     }
 
@@ -81,17 +100,29 @@ impl Reactor {
     }
 
     pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
-        let timeout_ms = timeout
-            .map(|t| {
-                if t == Duration::from_millis(0) {
-                    t
-                } else {
-                    // Non-zero duration must be at least 1ms.
-                    t.max(Duration::from_millis(1))
-                }
-            })
-            .and_then(|t| t.as_millis().try_into().ok())
-            .unwrap_or(-1);
+        let new_val = libc::itimerspec {
+            it_interval: TS_ZERO,
+            it_value: match timeout {
+                None => TS_ZERO,
+                Some(t) => libc::timespec {
+                    tv_sec: t.as_secs() as libc::time_t,
+                    tv_nsec: t.subsec_nanos() as libc::c_long,
+                },
+            },
+        };
+
+        syscall!(timerfd_settime(self.timer_fd, 0, &new_val, ptr::null_mut()))?;
+
+        self.interest(self.timer_fd, NOTIFY_KEY, true, false)?;
+
+        // Timeout in milliseconds for epoll.
+        let timeout_ms = if timeout == Some(Duration::from_secs(0)) {
+            // This is a non-blocking call - use zero as the timeout.
+            0
+        } else {
+            // This is a blocking call - rely on timerfd to trigger the timeout.
+            -1
+        };
 
         let res = syscall!(epoll_wait(
             self.epoll_fd,
