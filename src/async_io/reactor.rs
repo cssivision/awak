@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::io;
+use std::mem;
 use std::os::unix::io::RawFd;
 use std::panic;
 use std::sync::{
@@ -7,11 +9,12 @@ use std::sync::{
 };
 use std::task::{Poll, Waker};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::sys;
 use crate::parking;
 
+use concurrent_queue::ConcurrentQueue;
 use futures::future::poll_fn;
 use once_cell::sync::Lazy;
 use slab::Slab;
@@ -22,6 +25,14 @@ pub(crate) struct Reactor {
     sys: sys::Reactor,
     sources: Mutex<Slab<Arc<Source>>>,
     events: Mutex<sys::Events>,
+    timer_ops: ConcurrentQueue<TimerOp>,
+    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+}
+
+/// A single timer operation.
+enum TimerOp {
+    Insert(Instant, usize, Waker),
+    Remove(Instant, usize),
 }
 
 impl Drop for Reactor {
@@ -40,6 +51,15 @@ impl ReactorLock<'_> {
     pub(crate) fn react(mut self, timeout: Option<Duration>) -> io::Result<()> {
         let mut wakers = Vec::new();
 
+        let next_timer = self.reactor.process_timers(&mut wakers);
+
+        // compute the timeout for blocking on I/O events.
+        let timeout = match (next_timer, timeout) {
+            (None, None) => None,
+            (Some(t), None) | (None, Some(t)) => Some(t),
+            (Some(a), Some(b)) => Some(a.min(b)),
+        };
+
         // Bump the ticker before polling I/O.
         let tick = self
             .reactor
@@ -48,7 +68,13 @@ impl ReactorLock<'_> {
             .wrapping_add(1);
 
         let res = match self.reactor.sys.wait(&mut self.events, timeout) {
-            Ok(0) => Ok(()),
+            Ok(0) => {
+                if timeout != Some(Duration::from_secs(0)) {
+                    // The non-zero timeout was hit so fire ready timers.
+                    self.reactor.process_timers(&mut wakers);
+                }
+                Ok(())
+            }
 
             Ok(_) => {
                 let sources = self.reactor.sources.lock().unwrap();
@@ -152,6 +178,8 @@ impl Reactor {
                 sys: sys::Reactor::new().expect("init reactor fail"),
                 sources: Mutex::new(Slab::new()),
                 events: Mutex::new(sys::Events::new()),
+                timer_ops: ConcurrentQueue::bounded(1000),
+                timers: Mutex::new(BTreeMap::new()),
             }
         });
 
@@ -209,6 +237,78 @@ impl Reactor {
         let mut sources = self.sources.lock().unwrap();
         sources.remove(source.key);
         self.sys.remove(source.raw)
+    }
+
+    pub fn insert_timer(&self, when: Instant, waker: &Waker) -> usize {
+        // Generate a new timer ID.
+        static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
+        let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
+
+        while self
+            .timer_ops
+            .push(TimerOp::Insert(when, id, waker.clone()))
+            .is_err()
+        {
+            let mut timers = self.timers.lock().unwrap();
+            self.process_timer_ops(&mut timers);
+        }
+        self.notify();
+
+        id
+    }
+
+    pub(crate) fn remove_timer(&self, when: Instant, id: usize) {
+        while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
+            let mut timers = self.timers.lock().unwrap();
+            self.process_timer_ops(&mut timers);
+        }
+    }
+
+    fn process_timers(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
+        let mut timers = self.timers.lock().unwrap();
+        self.process_timer_ops(&mut timers);
+
+        let now = Instant::now();
+
+        // Split timers into ready and pending timers.
+        let pending = timers.split_off(&(now, 0));
+
+        let ready = mem::replace(&mut *timers, pending);
+
+        let dur = if ready.is_empty() {
+            timers
+                .keys()
+                .next()
+                .map(|(when, _)| when.saturating_duration_since(now))
+        } else {
+            Some(Duration::from_secs(0))
+        };
+
+        drop(timers);
+
+        for (_, waker) in ready {
+            wakers.push(waker);
+        }
+
+        dur
+    }
+
+    fn process_timer_ops(&self, timers: &mut MutexGuard<'_, BTreeMap<(Instant, usize), Waker>>) {
+        for _ in 0..self.timer_ops.capacity().unwrap() {
+            match self.timer_ops.pop() {
+                Ok(TimerOp::Insert(when, id, waker)) => {
+                    timers.insert((when, id), waker);
+                }
+                Ok(TimerOp::Remove(when, id)) => {
+                    timers.remove(&(when, id));
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn notify(&self) {
+        self.sys.notify().expect("failed to notify reactor");
     }
 }
 

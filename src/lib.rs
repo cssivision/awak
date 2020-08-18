@@ -25,6 +25,7 @@ pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
                 for _ in 0..200 {
                     if !ticker.tick() {
                         p.park();
+                        break;
                     }
                 }
 
