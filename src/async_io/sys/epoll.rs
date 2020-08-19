@@ -158,8 +158,10 @@ impl Reactor {
 impl Drop for Reactor {
     fn drop(&mut self) {
         let _ = self.remove(self.event_fd);
+        let _ = self.remove(self.timer_fd);
         let _ = syscall!(close(self.event_fd));
         let _ = syscall!(close(self.epoll_fd));
+        let _ = syscall!(close(self.timer_fd));
     }
 }
 
