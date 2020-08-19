@@ -1,17 +1,17 @@
 #[macro_use]
 mod pin;
-mod async_io;
 mod blocking;
 mod executor;
+mod io;
 mod parking;
 mod task;
 mod waker_fn;
 
 use std::thread;
 
-use async_io::reactor::Reactor;
 pub use blocking::block_on;
 pub use executor::Executor;
+use io::reactor::Reactor;
 
 use once_cell::sync::Lazy;
 
