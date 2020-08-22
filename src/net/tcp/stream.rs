@@ -20,5 +20,9 @@ impl TcpStream {
         } else {
             Domain::ipv4()
         };
+
+        let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
+
+        socket.set_nonblocking(true)?;
     }
 }

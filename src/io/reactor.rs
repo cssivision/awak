@@ -169,6 +169,8 @@ impl Reactor {
 
                     if !parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
                         sleeps += 1;
+                    } else {
+                        sleeps = 0;
                     }
                 }
             });

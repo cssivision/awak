@@ -1,3 +1,5 @@
+use cfg_if::cfg_if;
+
 macro_rules! syscall {
     ($fn:ident $args:tt) => {{
         let res = unsafe { libc::$fn $args };
@@ -19,6 +21,24 @@ pub struct Event {
     pub writable: bool,
 }
 
-mod epoll;
-
-pub use epoll::*;
+cfg_if! {
+    if #[cfg(any(target_os = "linux", target_os = "android"))] {
+        mod epoll;
+        pub use epoll::*;
+    } else if #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+    ))] {
+        mod kqueue;
+        pub use kqueue::*;
+    } else if #[cfg(target_os = "windows")] {
+        mod wepoll;
+        use wepoll as sys;
+    } else {
+        compile_error!("does not support this target OS");
+    }
+}
