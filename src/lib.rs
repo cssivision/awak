@@ -9,10 +9,13 @@ mod task;
 mod time;
 mod waker_fn;
 
+use std::future::Future;
 use std::thread;
 
 pub use blocking::block_on;
 pub use executor::Executor;
+pub use task::Task;
+
 use io::reactor::Reactor;
 
 use once_cell::sync::Lazy;
@@ -38,3 +41,7 @@ pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
 
     Executor::new()
 });
+
+pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    EXECUTOR.spawn(future)
+}

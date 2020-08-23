@@ -1,6 +1,7 @@
 pub mod reactor;
 pub mod sys;
 
+use std::future::Future;
 use std::io::{self, Read, Write};
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
@@ -11,7 +12,6 @@ use std::task::{Context, Poll};
 
 use reactor::{Reactor, Source};
 
-use futures::future::Future;
 use futures::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
 
 #[derive(Debug)]

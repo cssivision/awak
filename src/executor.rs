@@ -5,6 +5,8 @@ use std::panic::UnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::task::Task;
+
 use concurrent_queue::ConcurrentQueue;
 use rand::Rng;
 
@@ -19,9 +21,6 @@ impl Default for Executor {
         Executor::new()
     }
 }
-
-#[derive(Debug)]
-pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
 impl Executor {
     pub fn new() -> Executor {
