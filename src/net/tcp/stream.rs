@@ -13,6 +13,12 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
+    pub(crate) fn new(stream: net::TcpStream) -> io::Result<TcpStream> {
+        Ok(TcpStream {
+            inner: Async::new(stream)?,
+        })
+    }
+
     pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<TcpStream> {
         let addr = addr.into();
 
