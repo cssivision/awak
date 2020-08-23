@@ -169,6 +169,6 @@ fn shutdown_write(raw: RawFd) -> io::Result<()> {
 }
 
 fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    pin!(fut);
+    pin_mut!(fut);
     fut.poll(cx)
 }
