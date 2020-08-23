@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 
 use crate::io::Async;
 
-use futures::io::{AsyncRead, AsyncWrite};
+use futures::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
 use socket2::{Domain, Protocol, Socket, Type};
 
 pub struct TcpStream {
@@ -71,12 +71,46 @@ impl TcpStream {
     }
 }
 
-// impl AsyncRead for TcpStream {
-//     fn poll_read(
-//         self: Pin<&mut Self>,
-//         cx: &mut Context<'_>,
-//         buf: &mut [u8],
-//     ) -> Poll<Result<usize>> {
-//         unimplemented!();
-//     }
-// }
+impl AsyncRead for TcpStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+
+    fn poll_read_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_read_vectored(cx, bufs)
+    }
+}
+
+impl AsyncWrite for TcpStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
