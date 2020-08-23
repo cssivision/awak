@@ -370,7 +370,7 @@ impl Source {
         .await
     }
 
-    pub async fn writeable(&self) -> io::Result<()> {
+    pub async fn writable(&self) -> io::Result<()> {
         let mut ticks = None;
 
         poll_fn(|cx| {

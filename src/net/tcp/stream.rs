@@ -1,14 +1,15 @@
 use std::io;
 use std::net::{self, SocketAddr};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use crate::io::reactor::Source;
+use crate::io::Async;
 
-use socket2::{Domain, Socket};
+use futures::io::{AsyncRead, AsyncWrite};
+use socket2::{Domain, Protocol, Socket, Type};
 
 pub struct TcpStream {
-    source: Arc<Source>,
-    io: net::TcpStream,
+    inner: Async<net::TcpStream>,
 }
 
 impl TcpStream {
@@ -24,5 +25,58 @@ impl TcpStream {
         let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
 
         socket.set_nonblocking(true)?;
+
+        socket.connect(&addr.into()).or_else(|err| {
+            let in_progress = err.raw_os_error() == Some(libc::EINPROGRESS);
+
+            if in_progress {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        })?;
+
+        let stream = Async::new(socket.into_tcp_stream())?;
+
+        stream.writable().await?;
+
+        match stream.get_ref().take_error()? {
+            None => Ok(TcpStream { inner: stream }),
+            Some(err) => Err(err),
+        }
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.get_ref().local_addr()
+    }
+
+    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.get_ref().peer_addr()
+    }
+
+    pub fn shutdown(&self, how: net::Shutdown) -> std::io::Result<()> {
+        self.inner.get_ref().shutdown(how)
+    }
+
+    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read_with(|io| io.peek(buf)).await
+    }
+
+    pub fn nodelay(&self) -> io::Result<bool> {
+        self.inner.get_ref().nodelay()
+    }
+
+    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
+        self.inner.get_ref().set_nodelay(nodelay)
     }
 }
+
+// impl AsyncRead for TcpStream {
+//     fn poll_read(
+//         self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &mut [u8],
+//     ) -> Poll<Result<usize>> {
+//         unimplemented!();
+//     }
+// }
