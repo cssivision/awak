@@ -22,6 +22,12 @@ impl TcpListener {
         })
     }
 
+    pub fn from_std(listener: net::TcpListener) -> io::Result<TcpListener> {
+        Ok(TcpListener {
+            inner: Async::new(listener)?,
+        })
+    }
+
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.read_with(|io| io.accept()).await?;
 
@@ -30,6 +36,10 @@ impl TcpListener {
 
     pub fn incoming(&self) -> Incoming<'_> {
         Incoming { inner: self }
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.get_ref().local_addr()
     }
 }
 
