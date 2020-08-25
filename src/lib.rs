@@ -25,7 +25,7 @@ macro_rules! ready {
 mod blocking;
 mod executor;
 mod io;
-mod net;
+pub mod net;
 mod parking;
 mod task;
 mod time;
@@ -37,6 +37,9 @@ use std::thread;
 pub use blocking::block_on;
 pub use executor::Executor;
 pub use task::Task;
+
+pub use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+pub use futures::stream::StreamExt;
 
 use io::reactor::Reactor;
 
