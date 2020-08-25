@@ -1,7 +1,9 @@
 use std::io;
 use std::net::{self, SocketAddr};
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use crate::io::Async;
 
@@ -74,6 +76,15 @@ impl TcpStream {
 
     pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
         self.inner.get_ref().set_nodelay(nodelay)
+    }
+
+    pub fn set_keepalive(&self, keepalive: Option<Duration>) -> io::Result<()> {
+        self.as_socket().set_keepalive(keepalive)
+    }
+
+    fn as_socket(&self) -> Socket {
+        let raw_fd = self.inner.get_ref().as_raw_fd();
+        unsafe { Socket::from_raw_fd(raw_fd) }
     }
 }
 
