@@ -82,6 +82,10 @@ impl TcpStream {
         self.as_socket().set_keepalive(keepalive)
     }
 
+    pub fn keepalive(&self) -> io::Result<Option<Duration>> {
+        self.as_socket().keepalive()
+    }
+
     fn as_socket(&self) -> Socket {
         let raw_fd = self.inner.get_ref().as_raw_fd();
         unsafe { Socket::from_raw_fd(raw_fd) }
