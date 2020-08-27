@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{self, SocketAddr};
+use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -21,9 +21,7 @@ impl TcpStream {
         })
     }
 
-    pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<TcpStream> {
-        let addr = addr.into();
-
+    async fn connect_addr(addr: SocketAddr) -> io::Result<TcpStream> {
         let domain = if addr.is_ipv6() {
             Domain::ipv6()
         } else {
@@ -52,6 +50,26 @@ impl TcpStream {
             None => Ok(TcpStream { inner: stream }),
             Some(err) => Err(err),
         }
+    }
+
+    pub async fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
+        let addrs = addr.to_socket_addrs()?;
+
+        let mut last_err = None;
+
+        for addr in addrs {
+            match TcpStream::connect_addr(addr).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "could not resolve to any address",
+            )
+        }))
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
