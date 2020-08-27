@@ -2,7 +2,6 @@ use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -13,13 +12,13 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 #[derive(Debug)]
 pub struct TcpStream {
-    inner: Arc<Async<net::TcpStream>>,
+    inner: Async<net::TcpStream>,
 }
 
 impl TcpStream {
     pub fn from_std(stream: net::TcpStream) -> io::Result<TcpStream> {
         Ok(TcpStream {
-            inner: Arc::new(Async::new(stream)?),
+            inner: Async::new(stream)?,
         })
     }
 
@@ -49,9 +48,7 @@ impl TcpStream {
         stream.writable().await?;
 
         match stream.get_ref().take_error()? {
-            None => Ok(TcpStream {
-                inner: Arc::new(stream),
-            }),
+            None => Ok(TcpStream { inner: stream }),
             Some(err) => Err(err),
         }
     }
@@ -120,19 +117,19 @@ impl TcpStream {
 
 impl AsyncRead for TcpStream {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut &*self.inner).poll_read(cx, buf)
+        Pin::new(&mut self.inner).poll_read(cx, buf)
     }
 
     fn poll_read_vectored(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut &*self.inner).poll_read_vectored(cx, bufs)
+        Pin::new(&mut self.inner).poll_read_vectored(cx, bufs)
     }
 }
 
@@ -142,17 +139,51 @@ impl AsyncRead for &TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut &*self.inner).poll_read(cx, buf)
+        Pin::new(&mut &self.inner).poll_read(cx, buf)
+    }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &self.inner).poll_read_vectored(cx, bufs)
     }
 }
 
 impl AsyncWrite for TcpStream {
     fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
+
+impl AsyncWrite for &TcpStream {
+    fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut &*self.inner).poll_write(cx, buf)
+        Pin::new(&mut &self.inner).poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
@@ -160,15 +191,15 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut &*self.inner).poll_write_vectored(cx, bufs)
+        Pin::new(&mut &self.inner).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut &*self.inner).poll_flush(cx)
+        Pin::new(&mut &self.inner).poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut &*self.inner).poll_close(cx)
+        Pin::new(&mut &self.inner).poll_close(cx)
     }
 }
 
@@ -189,6 +220,40 @@ impl AsyncRead for ReadHalf<'_> {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+
+    fn poll_read_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_read_vectored(cx, bufs)
+    }
+}
+
+impl AsyncWrite for WriteHalf<'_> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_close(cx)
     }
 }
 
