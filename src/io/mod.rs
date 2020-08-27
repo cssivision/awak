@@ -132,6 +132,27 @@ impl<T: Read> AsyncRead for Async<T> {
     }
 }
 
+impl<T> AsyncRead for &Async<T>
+where
+    for<'a> &'a T: Read,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.read_with(|io| (&*io).read(buf)))
+    }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.read_with(|io| (&*io).read_vectored(bufs)))
+    }
+}
+
 impl<T: Write> AsyncWrite for Async<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -151,6 +172,35 @@ impl<T: Write> AsyncWrite for Async<T> {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         poll_future(cx, self.write_with_mut(|io| io.flush()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(shutdown_write(self.source.raw))
+    }
+}
+
+impl<T> AsyncWrite for &Async<T>
+where
+    for<'a> &'a T: Write,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.write_with(|io| (&*io).write(buf)))
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.write_with(|io| (&*io).write_vectored(bufs)))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        poll_future(cx, self.write_with(|io| (&*io).flush()))
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {

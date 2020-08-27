@@ -2,6 +2,7 @@ use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -10,14 +11,15 @@ use crate::io::Async;
 use futures::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
 use socket2::{Domain, Protocol, Socket, Type};
 
+#[derive(Debug)]
 pub struct TcpStream {
-    inner: Async<net::TcpStream>,
+    inner: Arc<Async<net::TcpStream>>,
 }
 
 impl TcpStream {
     pub fn from_std(stream: net::TcpStream) -> io::Result<TcpStream> {
         Ok(TcpStream {
-            inner: Async::new(stream)?,
+            inner: Arc::new(Async::new(stream)?),
         })
     }
 
@@ -47,7 +49,9 @@ impl TcpStream {
         stream.writable().await?;
 
         match stream.get_ref().take_error()? {
-            None => Ok(TcpStream { inner: stream }),
+            None => Ok(TcpStream {
+                inner: Arc::new(stream),
+            }),
             Some(err) => Err(err),
         }
     }
@@ -108,48 +112,94 @@ impl TcpStream {
         let raw_fd = self.inner.get_ref().as_raw_fd();
         unsafe { Socket::from_raw_fd(raw_fd) }
     }
+
+    pub fn split(&mut self) -> (ReadHalf<'_>, WriteHalf<'_>) {
+        split(self)
+    }
 }
 
 impl AsyncRead for TcpStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_read(cx, buf)
+        Pin::new(&mut &*self.inner).poll_read(cx, buf)
     }
 
     fn poll_read_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_read_vectored(cx, bufs)
+        Pin::new(&mut &*self.inner).poll_read_vectored(cx, bufs)
+    }
+}
+
+impl AsyncRead for &TcpStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self.inner).poll_read(cx, buf)
     }
 }
 
 impl AsyncWrite for TcpStream {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        Pin::new(&mut &*self.inner).poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+        Pin::new(&mut &*self.inner).poll_write_vectored(cx, bufs)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self.inner).poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_close(cx)
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self.inner).poll_close(cx)
+    }
+}
+
+#[derive(Debug)]
+pub struct ReadHalf<'a>(&'a TcpStream);
+
+#[derive(Debug)]
+pub struct WriteHalf<'a>(&'a TcpStream);
+
+pub(crate) fn split(stream: &mut TcpStream) -> (ReadHalf<'_>, WriteHalf<'_>) {
+    (ReadHalf(&*stream), WriteHalf(&*stream))
+}
+
+impl AsyncRead for ReadHalf<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsRef<TcpStream> for ReadHalf<'_> {
+    fn as_ref(&self) -> &TcpStream {
+        self.0
+    }
+}
+
+impl AsRef<TcpStream> for WriteHalf<'_> {
+    fn as_ref(&self) -> &TcpStream {
+        self.0
     }
 }
