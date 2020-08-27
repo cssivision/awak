@@ -189,7 +189,7 @@ impl Reactor {
         &REACTOR
     }
 
-    pub(crate) fn try_react() {
+    pub fn try_react() {
         if let Some(reactor_lock) = Reactor::get().try_lock() {
             let _ = reactor_lock.react(Some(Duration::from_secs(0)));
         }
@@ -260,7 +260,7 @@ impl Reactor {
         id
     }
 
-    pub(crate) fn remove_timer(&self, when: Instant, id: usize) {
+    pub fn remove_timer(&self, when: Instant, id: usize) {
         while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
             let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
@@ -317,7 +317,7 @@ impl Reactor {
 
 /// A registered source of I/O events.
 #[derive(Debug)]
-pub struct Source {
+pub(crate) struct Source {
     /// Raw file descriptor on Unix platforms.
     pub raw: RawFd,
     /// The key of this source obtained during registration.
@@ -327,7 +327,7 @@ pub struct Source {
 }
 
 #[derive(Debug)]
-pub struct Wakers {
+struct Wakers {
     /// Tasks waiting for the next readability event.
     readers: Vec<Waker>,
     /// Tasks waiting for the next writability event.

@@ -8,11 +8,13 @@ use std::net::{Shutdown, TcpStream};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
+use std::time::Instant;
 
 use reactor::{Reactor, Source};
 
-use futures::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
+pub use futures::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::io::{IoSlice, IoSliceMut};
 
 #[derive(Debug)]
 pub struct Async<T> {
@@ -171,4 +173,75 @@ fn shutdown_write(raw: RawFd) -> io::Result<()> {
 fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
     pin_mut!(fut);
     fut.poll(cx)
+}
+
+pub(crate) struct Timer {
+    deadline: Instant,
+    key: usize,
+    waker: Option<Waker>,
+}
+
+impl Timer {
+    pub fn new(deadline: Instant) -> Timer {
+        Timer {
+            deadline,
+            key: 0,
+            waker: None,
+        }
+    }
+
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    pub fn is_elapsed(&self) -> bool {
+        self.deadline < Instant::now()
+    }
+
+    pub fn reset(&mut self, when: Instant) {
+        if let Some(waker) = self.waker.as_ref() {
+            Reactor::get().remove_timer(self.deadline, self.key);
+            self.key = Reactor::get().insert_timer(when, waker);
+        }
+
+        self.deadline = when;
+    }
+}
+
+impl Future for Timer {
+    type Output = Instant;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.deadline <= Instant::now() {
+            if self.key > 0 {
+                Reactor::get().remove_timer(self.deadline, self.key);
+            }
+
+            Poll::Ready(self.deadline)
+        } else {
+            match self.waker {
+                None => {
+                    self.key = Reactor::get().insert_timer(self.deadline, cx.waker());
+                    self.waker = Some(cx.waker().clone());
+                }
+                Some(ref w) if !w.will_wake(cx.waker()) => {
+                    Reactor::get().remove_timer(self.deadline, self.key);
+
+                    self.key = Reactor::get().insert_timer(self.deadline, cx.waker());
+                    self.waker = Some(cx.waker().clone());
+                }
+                _ => {}
+            }
+
+            Poll::Pending
+        }
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        if let Some(_) = self.waker.take() {
+            Reactor::get().remove_timer(self.deadline, self.key);
+        }
+    }
 }

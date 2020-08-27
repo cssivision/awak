@@ -1,5 +1,6 @@
+use awak::io::{AsyncReadExt, AsyncWriteExt};
 use awak::net::TcpListener;
-use awak::{AsyncReadExt, AsyncWriteExt, StreamExt};
+use awak::StreamExt;
 
 fn main() {
     awak::block_on(async {
