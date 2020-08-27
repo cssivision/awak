@@ -2,6 +2,10 @@
 name = "awak"
 version = "0.1.0"
 authors = ["cssivision <cssivision@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/cssivision/awak"
+homepage = "https://github.com/cssivision/awak"
+description = "A small async runtime for Rust"
 edition = "2018"
 
 [dependencies]
