@@ -31,7 +31,7 @@ impl TcpListener {
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.read_with(|io| io.accept()).await?;
 
-        Ok((TcpStream::new(stream)?, addr))
+        Ok((TcpStream::from_std(stream)?, addr))
     }
 
     pub fn incoming(&self) -> Incoming<'_> {

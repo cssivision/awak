@@ -15,7 +15,7 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
-    pub(crate) fn new(stream: net::TcpStream) -> io::Result<TcpStream> {
+    pub fn from_std(stream: net::TcpStream) -> io::Result<TcpStream> {
         Ok(TcpStream {
             inner: Async::new(stream)?,
         })
