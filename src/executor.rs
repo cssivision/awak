@@ -56,7 +56,7 @@ impl Executor {
 
     pub fn ticker(&self, notify: impl Fn() + Send + Sync + 'static) -> Ticker {
         let ticker = Ticker {
-            global: Arc::new(self.global.clone()),
+            global: self.global.clone(),
             shard: Arc::new(ConcurrentQueue::bounded(512)),
             callback: Callback::new(notify),
             sleeping: Cell::new(false),
@@ -197,7 +197,7 @@ impl UnwindSafe for Ticker {}
 #[derive(Debug)]
 pub struct Ticker {
     /// The global queue.
-    global: Arc<Arc<Global>>,
+    global: Arc<Global>,
 
     /// A shard of the global queue.
     shard: Arc<ConcurrentQueue<Runnable>>,
