@@ -1,4 +1,5 @@
 use std::io;
+use std::mem::ManuallyDrop;
 use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
@@ -105,9 +106,9 @@ impl TcpStream {
         self.as_socket().keepalive()
     }
 
-    fn as_socket(&self) -> Socket {
+    fn as_socket(&self) -> ManuallyDrop<Socket> {
         let raw_fd = self.inner.get_ref().as_raw_fd();
-        unsafe { Socket::from_raw_fd(raw_fd) }
+        unsafe { ManuallyDrop::new(Socket::from_raw_fd(raw_fd)) }
     }
 
     pub fn split(&mut self) -> (ReadHalf<'_>, WriteHalf<'_>) {
