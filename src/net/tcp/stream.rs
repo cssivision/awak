@@ -18,6 +18,8 @@ pub struct TcpStream {
 
 impl TcpStream {
     pub fn from_std(stream: net::TcpStream) -> io::Result<TcpStream> {
+        stream.set_nonblocking(true)?;
+
         Ok(TcpStream {
             inner: Async::new(stream)?,
         })
