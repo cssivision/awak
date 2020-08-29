@@ -55,7 +55,7 @@ impl<T> Async<T> {
         let mut op = op;
         loop {
             match op(self.get_ref()) {
-                Err(err) => if err.kind() == io::ErrorKind::WouldBlock {},
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
 
@@ -70,7 +70,7 @@ impl<T> Async<T> {
         let mut op = op;
         loop {
             match op(self.get_mut()) {
-                Err(err) => if err.kind() == io::ErrorKind::WouldBlock {},
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
 
@@ -83,7 +83,7 @@ impl<T> Async<T> {
 
         loop {
             match op(self.get_ref()) {
-                Err(err) => if err.kind() == io::ErrorKind::WouldBlock {},
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
 
@@ -99,7 +99,7 @@ impl<T> Async<T> {
 
         loop {
             match op(self.get_mut()) {
-                Err(err) => if err.kind() == io::ErrorKind::WouldBlock {},
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
 
