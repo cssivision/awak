@@ -76,8 +76,8 @@ impl Reactor {
     }
 
     pub fn insert(&self, fd: RawFd) -> io::Result<()> {
-        let flags = syscall!(fcntl(fd, libc::F_GETFD))?;
-        syscall!(fcntl(fd, libc::F_SETFD, flags | libc::O_NONBLOCK))?;
+        let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
+        syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
 
         let mut ev = libc::epoll_event {
             events: 0,
