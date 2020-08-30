@@ -80,7 +80,7 @@ impl Reactor {
         syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
 
         let mut ev = libc::epoll_event {
-            events: libc::EPOLLONESHOT,
+            events: libc::EPOLLONESHOT as _,
             u64: 0u64,
         };
 
