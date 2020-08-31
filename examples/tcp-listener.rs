@@ -1,4 +1,4 @@
-use awak::io::{AsyncReadExt, AsyncWriteExt};
+use awak::io::AsyncWriteExt;
 use awak::net::TcpListener;
 use awak::StreamExt;
 
