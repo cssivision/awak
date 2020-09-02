@@ -4,7 +4,7 @@ use std::mem;
 use std::os::unix::io::RawFd;
 use std::panic;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex, MutexGuard,
 };
 use std::task::{Poll, Waker};
@@ -23,6 +23,7 @@ pub(crate) struct Reactor {
     unparker: parking::Unparker,
     ticker: AtomicUsize,
     sys: sys::Reactor,
+    notified: AtomicBool,
     sources: Mutex<Slab<Arc<Source>>>,
     events: Mutex<sys::Events>,
     timer_ops: ConcurrentQueue<TimerOp>,
@@ -69,6 +70,7 @@ impl ReactorLock<'_> {
 
         let res = match self.reactor.sys.wait(&mut self.events, timeout) {
             Ok(0) => {
+                self.reactor.notified.swap(false, Ordering::SeqCst);
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
                     self.reactor.process_timers(&mut wakers);
@@ -78,6 +80,7 @@ impl ReactorLock<'_> {
             }
 
             Ok(_) => {
+                self.reactor.notified.swap(false, Ordering::SeqCst);
                 let sources = self.reactor.sources.lock().unwrap();
 
                 for ev in self.events.iter() {
@@ -177,6 +180,7 @@ impl Reactor {
 
             Reactor {
                 unparker,
+                notified: AtomicBool::new(false),
                 ticker: AtomicUsize::new(0),
                 sys: sys::Reactor::new().expect("init reactor fail"),
                 sources: Mutex::new(Slab::new()),
@@ -311,7 +315,12 @@ impl Reactor {
     }
 
     fn notify(&self) {
-        self.sys.notify().expect("failed to notify reactor");
+        if !self
+            .notified
+            .compare_and_swap(false, true, Ordering::SeqCst)
+        {
+            self.sys.notify().expect("failed to notify reactor");
+        }
     }
 }
 
