@@ -4,14 +4,14 @@ use std::mem;
 use std::os::unix::io::RawFd;
 use std::panic;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc, Mutex, MutexGuard,
 };
 use std::task::{Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::sys;
+use super::poller::{Event, Poller};
 use crate::parking;
 
 use concurrent_queue::ConcurrentQueue;
@@ -22,10 +22,9 @@ use slab::Slab;
 pub(crate) struct Reactor {
     unparker: parking::Unparker,
     ticker: AtomicUsize,
-    sys: sys::Reactor,
-    notified: AtomicBool,
+    poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
-    events: Mutex<sys::Events>,
+    events: Mutex<Vec<Event>>,
     timer_ops: ConcurrentQueue<TimerOp>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 }
@@ -45,7 +44,7 @@ impl Drop for Reactor {
 /// A lock on the reactor.
 pub(crate) struct ReactorLock<'a> {
     reactor: &'a Reactor,
-    events: MutexGuard<'a, sys::Events>,
+    events: MutexGuard<'a, Vec<Event>>,
 }
 
 impl ReactorLock<'_> {
@@ -68,9 +67,10 @@ impl ReactorLock<'_> {
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
 
-        let res = match self.reactor.sys.wait(&mut self.events, timeout) {
+        self.events.clear();
+
+        let res = match self.reactor.poller.wait(&mut self.events, timeout) {
             Ok(0) => {
-                self.reactor.notified.swap(false, Ordering::SeqCst);
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
                     self.reactor.process_timers(&mut wakers);
@@ -80,7 +80,6 @@ impl ReactorLock<'_> {
             }
 
             Ok(_) => {
-                self.reactor.notified.swap(false, Ordering::SeqCst);
                 let sources = self.reactor.sources.lock().unwrap();
 
                 for ev in self.events.iter() {
@@ -100,7 +99,7 @@ impl ReactorLock<'_> {
                         }
 
                         if !(w.writers.is_empty() && w.readers.is_empty()) {
-                            self.reactor.sys.interest(
+                            self.reactor.poller.interest(
                                 source.raw,
                                 source.key,
                                 !w.readers.is_empty(),
@@ -180,11 +179,10 @@ impl Reactor {
 
             Reactor {
                 unparker,
-                notified: AtomicBool::new(false),
                 ticker: AtomicUsize::new(0),
-                sys: sys::Reactor::new().expect("init reactor fail"),
+                poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
-                events: Mutex::new(sys::Events::new()),
+                events: Mutex::new(Vec::new()),
                 timer_ops: ConcurrentQueue::bounded(1000),
                 timers: Mutex::new(BTreeMap::new()),
             }
@@ -214,11 +212,11 @@ impl Reactor {
     }
 
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-        self.sys.interest(raw, key, read, write)
+        self.poller.interest(raw, key, read, write)
     }
 
     pub fn insert_io(&self, raw: RawFd) -> io::Result<Arc<Source>> {
-        self.sys.insert(raw)?;
+        self.poller.insert(raw)?;
 
         let mut sources = self.sources.lock().unwrap();
         let entry = sources.vacant_entry();
@@ -243,7 +241,7 @@ impl Reactor {
     pub fn remove_io(&self, source: &Source) -> io::Result<()> {
         let mut sources = self.sources.lock().unwrap();
         sources.remove(source.key);
-        self.sys.remove(source.raw)
+        self.poller.remove(source.raw)
     }
 
     pub fn insert_timer(&self, when: Instant, waker: &Waker) -> usize {
@@ -315,12 +313,7 @@ impl Reactor {
     }
 
     fn notify(&self) {
-        if !self
-            .notified
-            .compare_and_swap(false, true, Ordering::SeqCst)
-        {
-            self.sys.notify().expect("failed to notify reactor");
-        }
+        self.poller.notify().expect("failed to notify reactor");
     }
 }
 
