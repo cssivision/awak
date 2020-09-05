@@ -249,7 +249,7 @@ impl Ticker {
         }
     }
 
-    /// Runs a single task and returns `true` if one was found.
+    /// Return a single task and returns `None` if one was found.
     async fn tick(&self) -> Runnable {
         poll_fn(|cx| {
             loop {
