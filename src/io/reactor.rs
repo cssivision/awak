@@ -191,12 +191,6 @@ impl Reactor {
         &REACTOR
     }
 
-    pub fn try_react() {
-        if let Some(reactor_lock) = Reactor::get().try_lock() {
-            let _ = reactor_lock.react(Some(Duration::from_secs(0)));
-        }
-    }
-
     fn lock(&self) -> ReactorLock<'_> {
         let reactor = self;
         let events = self.events.lock().unwrap();

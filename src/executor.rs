@@ -1,13 +1,18 @@
 use std::cell::Cell;
-use std::fmt;
 use std::future::Future;
 use std::panic::UnwindSafe;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::pin::Pin;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, RwLock,
+};
+use std::task::{Context, Poll, Waker};
 
 use crate::task::Task;
 
 use concurrent_queue::ConcurrentQueue;
+use futures::future::poll_fn;
+
 use rand::Rng;
 
 /// A multi-threaded executor.
@@ -31,7 +36,8 @@ impl Executor {
                 shards: RwLock::new(Vec::new()),
                 sleepers: Mutex::new(Sleepers {
                     count: 0,
-                    callbacks: Vec::new(),
+                    wakers: Vec::new(),
+                    id_gen: 0,
                 }),
             }),
         }
@@ -54,12 +60,11 @@ impl Executor {
         Task(Some(handle))
     }
 
-    pub fn ticker(&self, notify: impl Fn() + Send + Sync + 'static) -> Ticker {
+    pub fn ticker(&self) -> Ticker {
         let ticker = Ticker {
             global: self.global.clone(),
             shard: Arc::new(ConcurrentQueue::bounded(512)),
-            callback: Callback::new(notify),
-            sleeping: Cell::new(false),
+            sleeping: Cell::new(None),
             ticks: Cell::new(0),
         };
 
@@ -70,34 +75,6 @@ impl Executor {
             .push(ticker.shard.clone());
 
         ticker
-    }
-}
-
-/// A cloneable callback function.
-#[derive(Clone)]
-struct Callback(Arc<Box<dyn Fn() + Send + Sync>>);
-
-impl Callback {
-    fn new(f: impl Fn() + Send + Sync + 'static) -> Callback {
-        Callback(Arc::new(Box::new(f)))
-    }
-
-    fn call(&self) {
-        (self.0)();
-    }
-}
-
-impl PartialEq for Callback {
-    fn eq(&self, other: &Callback) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for Callback {}
-
-impl fmt::Debug for Callback {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("<callback>").finish()
     }
 }
 
@@ -127,53 +104,64 @@ struct Sleepers {
     /// Callbacks of sleeping unnotified tickers.
     ///
     /// A sleeping ticker is notified when its callback is missing from this list.
-    callbacks: Vec<Callback>,
+    wakers: Vec<(u64, Waker)>,
+
+    /// ID generator for sleepers.
+    id_gen: u64,
 }
 
 impl Sleepers {
     /// Returns notification callback for a sleeping ticker.
     ///
     /// If a ticker was notified already or there are no tickers, `None` will be returned.
-    fn notify(&mut self) -> Option<Callback> {
-        if self.callbacks.len() == self.count {
-            self.callbacks.pop()
+    fn notify(&mut self) -> Option<Waker> {
+        if self.wakers.len() == self.count {
+            self.wakers.pop().map(|item| item.1)
         } else {
             None
         }
     }
 
-    /// Re-inserts a sleeping ticker's callback if it was notified.
+    /// Re-inserts a sleeping ticker's waker if it was notified.
     ///
     /// Returns `true` if the ticker was notified.
-    fn update(&mut self, callback: &Callback) -> bool {
-        if self.callbacks.iter().all(|cb| cb != callback) {
-            self.callbacks.push(callback.clone());
-            true
-        } else {
-            false
+    fn update(&mut self, id: u64, waker: &Waker) -> bool {
+        for item in &mut self.wakers {
+            if item.0 == id {
+                if !item.1.will_wake(waker) {
+                    item.1 = waker.clone();
+                }
+                return false;
+            }
         }
+
+        self.wakers.push((id, waker.clone()));
+        true
     }
 
     /// Returns `true` if a sleeping ticker is notified or no tickers are sleeping.
     fn is_notified(&self) -> bool {
-        self.count == 0 || self.count > self.callbacks.len()
+        self.count == 0 || self.count > self.wakers.len()
     }
 
     /// Removes a previously inserted sleeping ticker.
-    fn remove(&mut self, callback: &Callback) {
+    fn remove(&mut self, id: u64) {
         self.count -= 1;
-        for i in (0..self.callbacks.len()).rev() {
-            if &self.callbacks[i] == callback {
-                self.callbacks.remove(i);
+        for i in (0..self.wakers.len()).rev() {
+            if self.wakers[i].0 == id {
+                self.wakers.remove(i);
                 return;
             }
         }
     }
 
     /// Inserts a new sleeping ticker.
-    fn insert(&mut self, callback: &Callback) {
+    fn insert(&mut self, waker: &Waker) -> u64 {
+        let id = self.id_gen;
+        self.id_gen += 1;
         self.count += 1;
-        self.callbacks.push(callback.clone());
+        self.wakers.push((id, waker.clone()));
+        id
     }
 }
 
@@ -183,9 +171,9 @@ impl Global {
             .notified
             .compare_and_swap(false, true, Ordering::SeqCst)
         {
-            let callback = self.sleepers.lock().unwrap().notify();
-            if let Some(cb) = callback {
-                cb.call();
+            let waker = self.sleepers.lock().unwrap().notify();
+            if let Some(waker) = waker {
+                waker.wake();
             }
         }
     }
@@ -202,16 +190,13 @@ pub struct Ticker {
     /// A shard of the global queue.
     shard: Arc<ConcurrentQueue<Runnable>>,
 
-    /// Callback invoked to wake this ticker up.
-    callback: Callback,
-
-    /// Set to `true` when in sleeping state.
+    /// Set to `sleeper's id` when in sleeping state.
     ///
     /// States a ticker can be in:
     /// 1) Woken.
     /// 2a) Sleeping and unnotified.
     /// 2b) Sleeping and notified.
-    sleeping: Cell<bool>,
+    sleeping: Cell<Option<u64>>,
 
     /// Bumped every time a task is run.
     ticks: Cell<usize>,
@@ -221,71 +206,79 @@ impl Ticker {
     /// Moves the ticker into sleeping and unnotified state.
     ///
     /// Returns `false` if the ticker was already sleeping and unnotified.
-    fn sleep(&self) -> bool {
+    fn sleep(&self, waker: &Waker) -> bool {
         let mut sleepers = self.global.sleepers.lock().unwrap();
 
-        if self.sleeping.get() {
-            // Already sleeping, check if notified.
-            if !sleepers.update(&self.callback) {
-                return false;
-            }
-        } else {
+        match self.sleeping.get() {
             // Move to sleeping state.
-            sleepers.insert(&self.callback);
+            None => self.sleeping.set(Some(sleepers.insert(waker))),
+            Some(id) => {
+                // Already sleeping, check if notified.
+                if !sleepers.update(id, waker) {
+                    return false;
+                }
+            }
         }
 
         self.global
             .notified
             .swap(sleepers.is_notified(), Ordering::SeqCst);
 
-        self.sleeping.set(true);
         true
     }
 
-    fn wake(&self) -> bool {
-        if self.sleeping.get() {
+    fn wake(&self) {
+        if let Some(id) = self.sleeping.take() {
             let mut sleepers = self.global.sleepers.lock().unwrap();
-            sleepers.remove(&self.callback);
+            sleepers.remove(id);
 
             self.global
                 .notified
                 .swap(sleepers.is_notified(), Ordering::SeqCst);
         }
+    }
 
-        self.sleeping.replace(false)
+    pub async fn run(&self) {
+        loop {
+            for _ in 0..200 {
+                let runnable = self.tick().await;
+                runnable.run();
+            }
+
+            yield_now().await;
+        }
     }
 
     /// Runs a single task and returns `true` if one was found.
-    pub fn tick(&self) -> bool {
-        loop {
-            match self.search() {
-                None => {
-                    if !self.sleep() {
-                        return false;
+    async fn tick(&self) -> Runnable {
+        poll_fn(|cx| {
+            loop {
+                match self.search() {
+                    None => {
+                        if !self.sleep(cx.waker()) {
+                            return Poll::Pending;
+                        }
                     }
-                }
-                Some(r) => {
-                    self.wake();
+                    Some(r) => {
+                        self.wake();
+                        // Notify another ticker now to pick up where this ticker left off, just in
+                        // case running the task takes a long time.
+                        self.global.notify();
+                        // Bump the ticker.
 
-                    // Notify another ticker now to pick up where this ticker left off, just in
-                    // case running the task takes a long time.
-                    self.global.notify();
+                        let ticks = self.ticks.get();
+                        self.ticks.set(ticks.wrapping_add(1));
+                        // Steal tasks from the global queue to ensure fair task scheduling.
+                        if ticks % 64 == 0 {
+                            steal(&self.global.queue, &self.shard);
+                        }
 
-                    // Bump the ticker.
-                    let ticks = self.ticks.get();
-                    self.ticks.set(ticks.wrapping_add(1));
-
-                    // Steal tasks from the global queue to ensure fair task scheduling.
-                    if ticks % 64 == 0 {
-                        steal(&self.global.queue, &self.shard);
+                        return Poll::Ready(r);
                     }
-
-                    r.run();
-
-                    return true;
                 }
             }
-        }
+        })
+        .await
     }
 
     /// Finds the next task to run.
@@ -342,6 +335,28 @@ fn steal<T>(src: &ConcurrentQueue<T>, dest: &ConcurrentQueue<T>) {
             } else {
                 break;
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+struct YieldNow(bool);
+
+fn yield_now() -> YieldNow {
+    YieldNow(false)
+}
+
+impl Future for YieldNow {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if !self.0 {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            Poll::Ready(())
         }
     }
 }

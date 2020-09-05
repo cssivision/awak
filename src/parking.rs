@@ -8,7 +8,9 @@ use crate::waker_fn::waker_fn;
 pub fn parker_and_waker() -> (Parker, Waker) {
     let parker = Parker::new();
     let unparker = parker.unparker();
-    let waker = waker_fn(move || unparker.unpark());
+    let waker = waker_fn(move || {
+        let _ = unparker.unpark();
+    });
     (parker, waker)
 }
 
@@ -49,7 +51,7 @@ impl Parker {
 }
 
 impl Unparker {
-    pub fn unpark(&self) {
+    pub fn unpark(&self) -> bool {
         self.inner.unpark()
     }
 }
@@ -128,15 +130,15 @@ impl Inner {
         }
     }
 
-    fn unpark(&self) {
+    fn unpark(&self) -> bool {
         // To ensure the unparked thread will observe any writes we made before this call, we must
         // perform a release operation that `park` can synchronize with. To do that we must write
         // `NOTIFIED` even if `state` is already `NOTIFIED`. That is why this must be a swap rather
         // than a compare-and-swap that returns if it reads `NOTIFIED` on failure.
         match self.state.swap(NOTIFIED, SeqCst) {
-            EMPTY => return,    // no one was waiting
-            NOTIFIED => return, // already unparked
-            PARKED => {}        // gotta go wake someone up
+            EMPTY => return true,     // no one was waiting
+            NOTIFIED => return false, // already unparked
+            PARKED => {}              // gotta go wake someone up
             _ => panic!("inconsistent state in unpark"),
         }
 
@@ -150,5 +152,7 @@ impl Inner {
         // it doesn't get woken only to have to wait for us to release `lock`.
         drop(self.lock.lock().unwrap());
         self.cvar.notify_one();
+
+        true
     }
 }

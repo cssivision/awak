@@ -40,26 +40,14 @@ pub use task::Task;
 
 pub use futures::stream::StreamExt;
 
-use io::reactor::Reactor;
-
 use once_cell::sync::Lazy;
 
 pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
     for _ in 0..num_cpus::get().max(1) {
         thread::spawn(|| {
-            let (p, u) = parking::pair();
-            let ticker = EXECUTOR.ticker(move || u.unpark());
+            let ticker = EXECUTOR.ticker();
 
-            loop {
-                for _ in 0..200 {
-                    if !ticker.tick() {
-                        p.park();
-                        break;
-                    }
-                }
-
-                Reactor::try_react();
-            }
+            block_on(ticker.run());
         });
     }
 
