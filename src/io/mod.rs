@@ -290,7 +290,7 @@ impl Future for Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        if let Some(_) = self.waker.take() {
+        if self.waker.take().is_some() {
             Reactor::get().remove_timer(self.deadline, self.key);
         }
     }

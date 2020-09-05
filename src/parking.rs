@@ -98,9 +98,12 @@ impl Inner {
             None => loop {
                 m = self.cvar.wait(m).unwrap();
 
-                match self.state.compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst) {
-                    Ok(_) => return true, // got a notification
-                    Err(_) => {}          // spurious wakeup, go back to sleep
+                if self
+                    .state
+                    .compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst)
+                    .is_ok()
+                {
+                    return true; // got a notification
                 }
             },
             Some(d) => {

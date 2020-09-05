@@ -63,28 +63,21 @@ impl UdpSocket {
         }))
     }
 
-    pub async fn send(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write_with_mut(|io| io.send(buf)).await
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write_with(|io| io.send(buf)).await
     }
 
-    pub async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read_with_mut(|io| io.recv(buf)).await
+    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read_with(|io| io.recv(buf)).await
     }
 
-    pub async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.inner.read_with_mut(|io| io.recv_from(buf)).await
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.inner.read_with(|io| io.recv_from(buf)).await
     }
 
-    pub async fn send_to<A: ToSocketAddrs>(&mut self, buf: &[u8], target: A) -> io::Result<usize> {
-        let addrs = target.to_socket_addrs()?;
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], target: A) -> io::Result<usize> {
+        let addr = target.into();
 
-        for addr in addrs {
-            return self.inner.write_with_mut(|io| io.send_to(buf, addr)).await;
-        }
-
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "no addresses to send data to",
-        ))
+        self.inner.write_with(|io| io.send_to(buf, addr)).await
     }
 }

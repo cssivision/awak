@@ -40,10 +40,8 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     let waker = waker_fn({
         let io_blocked = io_blocked.clone();
         move || {
-            if u.unpark() {
-                if !IO_POLLING.with(Cell::get) && io_blocked.load(Ordering::SeqCst) {
-                    Reactor::get().notify();
-                }
+            if u.unpark() && !IO_POLLING.with(Cell::get) && io_blocked.load(Ordering::SeqCst) {
+                Reactor::get().notify();
             }
         }
     });

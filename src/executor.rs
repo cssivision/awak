@@ -101,7 +101,7 @@ struct Sleepers {
     /// Number of sleeping tickers (both notified and unnotified).
     count: usize,
 
-    /// Callbacks of sleeping unnotified tickers.
+    /// Wakers of sleeping unnotified tickers.
     ///
     /// A sleeping ticker is notified when its callback is missing from this list.
     wakers: Vec<(u64, Waker)>,

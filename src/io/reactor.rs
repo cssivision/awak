@@ -119,8 +119,6 @@ impl ReactorLock<'_> {
             Err(err) => Err(err),
         };
 
-        drop(self);
-
         // Wake up ready tasks.
         for waker in wakers {
             // Don't let a panicking waker blow everything up.
