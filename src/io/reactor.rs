@@ -20,7 +20,8 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 
 pub(crate) struct Reactor {
-    unparker: parking::Unparker,
+    pub block_on_count: AtomicUsize,
+    pub unparker: parking::Unparker,
     ticker: AtomicUsize,
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
@@ -48,7 +49,7 @@ pub(crate) struct ReactorLock<'a> {
 }
 
 impl ReactorLock<'_> {
-    pub(crate) fn react(mut self, timeout: Option<Duration>) -> io::Result<()> {
+    pub(crate) fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         let mut wakers = Vec::new();
 
         let next_timer = self.reactor.process_timers(&mut wakers);
@@ -155,7 +156,7 @@ impl Reactor {
                             Reactor::get().try_lock()
                         };
 
-                        if let Some(reactor_lock) = reactor_lock {
+                        if let Some(mut reactor_lock) = reactor_lock {
                             let _ = reactor_lock.react(None);
                             last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
                             sleeps = 0;
@@ -164,21 +165,25 @@ impl Reactor {
                         last_tick = tick;
                     }
 
-                    // Exponential backoff from 50us to 10ms.
-                    let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
-                        .get(sleeps as usize)
-                        .unwrap_or(&10_000);
+                    if Reactor::get().block_on_count.load(Ordering::SeqCst) > 0 {
+                        // Exponential backoff from 50us to 10ms.
+                        let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
+                            .get(sleeps as usize)
+                            .unwrap_or(&10_000);
 
-                    if !parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
-                        sleeps += 1;
-                    } else {
-                        sleeps = 0;
+                        if !parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
+                            sleeps += 1;
+                        } else {
+                            sleeps = 0;
+                            last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
+                        }
                     }
                 }
             });
 
             Reactor {
                 unparker,
+                block_on_count: AtomicUsize::new(0),
                 ticker: AtomicUsize::new(0),
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
@@ -306,7 +311,7 @@ impl Reactor {
         }
     }
 
-    fn notify(&self) {
+    pub fn notify(&self) {
         self.poller.notify().expect("failed to notify reactor");
     }
 }

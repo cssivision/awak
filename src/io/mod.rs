@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
-use reactor::{Reactor, Source};
+pub(crate) use reactor::{Reactor, Source};
 
 pub use futures::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures::io::{IoSlice, IoSliceMut};
