@@ -22,25 +22,33 @@ pub struct Async<T> {
     source: Arc<Source>,
 
     /// The inner I/O handle.
-    io: Box<T>,
+    io: Option<T>,
 }
+
+impl<T> Unpin for Async<T> {}
 
 impl<T: AsRawFd> Async<T> {
     pub(crate) fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
             source: Reactor::get().insert_io(io.as_raw_fd())?,
-            io: Box::new(io),
+            io: Some(io),
         })
     }
 }
 
 impl<T> Async<T> {
     pub fn get_ref(&self) -> &T {
-        &self.io
+        self.io.as_ref().unwrap()
     }
 
     pub fn get_mut(&mut self) -> &mut T {
-        &mut self.io
+        self.io.as_mut().unwrap()
+    }
+
+    pub fn into_inner(mut self) -> io::Result<T> {
+        let io = self.io.take().unwrap();
+        Reactor::get().remove_io(&self.source)?;
+        Ok(io)
     }
 
     pub async fn readable(&self) -> io::Result<()> {
