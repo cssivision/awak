@@ -261,11 +261,12 @@ impl Ticker {
                     }
                     Some(r) => {
                         self.wake();
+
                         // Notify another ticker now to pick up where this ticker left off, just in
                         // case running the task takes a long time.
                         self.global.notify();
-                        // Bump the ticker.
 
+                        // Bump the ticker.
                         let ticks = self.ticks.get();
                         self.ticks.set(ticks.wrapping_add(1));
                         // Steal tasks from the global queue to ensure fair task scheduling.
