@@ -1,9 +1,8 @@
-use std::cell::Cell;
 use std::future::Future;
 use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex, RwLock,
 };
 use std::task::{Context, Poll, Waker};
@@ -37,7 +36,7 @@ impl Executor {
                 sleepers: Mutex::new(Sleepers {
                     count: 0,
                     wakers: Vec::new(),
-                    id_gen: 0,
+                    id_gen: 1,
                 }),
             }),
         }
@@ -64,8 +63,8 @@ impl Executor {
         let ticker = Ticker {
             global: self.global.clone(),
             shard: Arc::new(ConcurrentQueue::bounded(512)),
-            sleeping: Cell::new(None),
-            ticks: Cell::new(0),
+            sleeping: AtomicU64::new(0),
+            ticks: AtomicUsize::new(0),
         };
 
         self.global
@@ -196,10 +195,10 @@ pub struct Ticker {
     /// 1) Woken.
     /// 2a) Sleeping and unnotified.
     /// 2b) Sleeping and notified.
-    sleeping: Cell<Option<u64>>,
+    sleeping: AtomicU64,
 
     /// Bumped every time a task is run.
-    ticks: Cell<usize>,
+    ticks: AtomicUsize,
 }
 
 impl Ticker {
@@ -209,10 +208,12 @@ impl Ticker {
     fn sleep(&self, waker: &Waker) -> bool {
         let mut sleepers = self.global.sleepers.lock().unwrap();
 
-        match self.sleeping.get() {
+        match self.sleeping.load(Ordering::SeqCst) {
             // Move to sleeping state.
-            None => self.sleeping.set(Some(sleepers.insert(waker))),
-            Some(id) => {
+            0 => self
+                .sleeping
+                .store(sleepers.insert(waker), Ordering::SeqCst),
+            id => {
                 // Already sleeping, check if notified.
                 if !sleepers.update(id, waker) {
                     return false;
@@ -228,14 +229,17 @@ impl Ticker {
     }
 
     fn wake(&self) {
-        if let Some(id) = self.sleeping.take() {
-            let mut sleepers = self.global.sleepers.lock().unwrap();
-            sleepers.remove(id);
-
-            self.global
-                .notified
-                .swap(sleepers.is_notified(), Ordering::SeqCst);
+        let id = self.sleeping.swap(0, Ordering::SeqCst);
+        if id == 0 {
+            return;
         }
+
+        let mut sleepers = self.global.sleepers.lock().unwrap();
+        sleepers.remove(id);
+
+        self.global
+            .notified
+            .swap(sleepers.is_notified(), Ordering::SeqCst);
     }
 
     pub async fn run(&self) {
@@ -267,8 +271,7 @@ impl Ticker {
                         self.global.notify();
 
                         // Bump the ticker.
-                        let ticks = self.ticks.get();
-                        self.ticks.set(ticks.wrapping_add(1));
+                        let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                         // Steal tasks from the global queue to ensure fair task scheduling.
                         if ticks % 64 == 0 {
                             steal(&self.global.queue, &self.shard);
