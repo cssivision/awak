@@ -33,9 +33,6 @@ cfg_if! {
     ))] {
         mod kqueue;
         use kqueue as sys;
-    } else if #[cfg(target_os = "windows")] {
-        mod wepoll;
-        use wepoll as sys;
     } else {
         compile_error!("does not support this target OS");
     }
