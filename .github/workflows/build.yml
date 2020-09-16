@@ -40,6 +40,8 @@ jobs:
       with:
         command: test
         args: --verbose
+
+    - run: rustup component add clippy
     
     - name: Clippy
       uses: actions-rs/cargo@v1
