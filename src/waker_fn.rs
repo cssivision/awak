@@ -16,6 +16,7 @@ impl<F: Fn() + Send + Sync + 'static> Helper<F> {
 
     unsafe fn clone(f: *const ()) -> RawWaker {
         let arc = ManuallyDrop::new(Arc::from_raw(f as *const F));
+        #[allow(clippy::redundant_clone)]
         mem::forget(arc.clone());
         RawWaker::new(f, &Self::VTABLE)
     }
