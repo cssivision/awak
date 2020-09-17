@@ -10,7 +10,7 @@ use std::task::{Context, Poll, Waker};
 use crate::task::Task;
 
 use concurrent_queue::ConcurrentQueue;
-use futures::future::poll_fn;
+use futures_util::future::poll_fn;
 
 use rand::Rng;
 

@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use super::stream::TcpStream;
 use crate::io::Async;
 
-use futures::stream::Stream;
+use futures_util::stream::Stream;
 
 pub struct TcpListener {
     inner: Async<net::TcpListener>,

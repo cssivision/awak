@@ -13,8 +13,8 @@ use std::time::Instant;
 
 pub(crate) use reactor::{Reactor, Source};
 
-pub use futures::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use futures::io::{IoSlice, IoSliceMut};
+pub use futures_util::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures_util::io::{IoSlice, IoSliceMut};
 
 #[derive(Debug)]
 pub struct Async<T> {

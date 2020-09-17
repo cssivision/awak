@@ -15,7 +15,7 @@ use super::poller::{Event, Poller};
 use crate::parking;
 
 use concurrent_queue::ConcurrentQueue;
-use futures::future::poll_fn;
+use futures_util::future::poll_fn;
 use once_cell::sync::Lazy;
 use slab::Slab;
 

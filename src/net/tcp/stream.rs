@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::io::Async;
 
-use futures::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
+use futures_util::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
 use socket2::{Domain, Protocol, Socket, Type};
 
 #[derive(Debug)]

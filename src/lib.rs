@@ -38,7 +38,7 @@ pub use blocking::block_on;
 pub use executor::Executor;
 pub use task::Task;
 
-pub use futures::stream::StreamExt;
+pub use futures_util::stream::StreamExt;
 
 use once_cell::sync::Lazy;
 
