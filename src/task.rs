@@ -5,6 +5,12 @@ use std::task::{Context, Poll};
 #[derive(Debug)]
 pub struct Task<T>(pub Option<async_task::JoinHandle<T, ()>>);
 
+impl<T> Task<T> {
+    pub fn cancel(&self) {
+        self.0.as_ref().unwrap().cancel();
+    }
+}
+
 impl<T> Future for Task<T> {
     type Output = T;
 
