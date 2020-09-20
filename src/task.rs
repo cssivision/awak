@@ -6,8 +6,10 @@ use std::task::{Context, Poll};
 pub struct Task<T>(pub Option<async_task::JoinHandle<T, ()>>);
 
 impl<T> Task<T> {
-    pub fn cancel(&self) {
-        self.0.as_ref().unwrap().cancel();
+    pub async fn cancel(mut self) -> Option<T> {
+        let handle = self.0.take().unwrap();
+        handle.cancel();
+        handle.await
     }
 }
 
