@@ -7,8 +7,7 @@ use std::sync::{
 };
 use std::task::{Context, Poll, Waker};
 
-use crate::task::Task;
-
+use async_task::{Runnable, Task};
 use concurrent_queue::ConcurrentQueue;
 use futures_util::future::poll_fn;
 
@@ -53,10 +52,10 @@ impl Executor {
             global.notify();
         };
 
-        let (runnable, handle) = async_task::spawn(future, schedule, ());
+        let (runnable, task) = async_task::spawn(future, schedule);
         runnable.schedule();
 
-        Task(Some(handle))
+        task
     }
 
     pub fn ticker(&self) -> Ticker {
@@ -76,8 +75,6 @@ impl Executor {
         ticker
     }
 }
-
-type Runnable = async_task::Task<()>;
 
 #[derive(Debug)]
 struct Global {

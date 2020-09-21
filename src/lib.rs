@@ -27,16 +27,15 @@ pub mod executor;
 pub mod io;
 pub mod net;
 mod parking;
-pub mod task;
 pub mod time;
 mod waker_fn;
 
 use std::future::Future;
 use std::thread;
 
+pub use async_task::Task;
 pub use blocking::block_on;
 pub use executor::Executor;
-pub use task::Task;
 
 pub use futures_util::stream::StreamExt;
 
