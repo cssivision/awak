@@ -3,9 +3,7 @@ pub mod reactor;
 
 use std::future::Future;
 use std::io::{self, Read, Write};
-use std::mem::ManuallyDrop;
-use std::net::{Shutdown, TcpStream};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -183,7 +181,7 @@ impl<T: Write> AsyncWrite for Async<T> {
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(shutdown_write(self.source.raw))
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -212,19 +210,7 @@ where
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(shutdown_write(self.source.raw))
-    }
-}
-
-fn shutdown_write(raw: RawFd) -> io::Result<()> {
-    // This may not be a TCP stream, but that's okay. All we do is attempt a `shutdown()` on the
-    // raw descriptor and ignore errors.
-    let stream = unsafe { ManuallyDrop::new(TcpStream::from_raw_fd(raw)) };
-
-    // If the socket is a TCP stream, the only actual error can be ENOTCONN.
-    match stream.shutdown(Shutdown::Write) {
-        Err(err) if err.kind() == io::ErrorKind::NotConnected => Err(err),
-        _ => Ok(()),
+        Poll::Ready(Ok(()))
     }
 }
 

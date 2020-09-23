@@ -1,6 +1,6 @@
 use std::io;
 use std::mem::ManuallyDrop;
-use std::net::{self, SocketAddr, ToSocketAddrs};
+use std::net::{self, Shutdown, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -173,8 +173,8 @@ impl AsyncWrite for TcpStream {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_close(cx)
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(self.shutdown(Shutdown::Write))
     }
 }
 
@@ -199,8 +199,8 @@ impl AsyncWrite for &TcpStream {
         Pin::new(&mut &self.inner).poll_flush(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut &self.inner).poll_close(cx)
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(self.shutdown(Shutdown::Write))
     }
 }
 
@@ -253,8 +253,8 @@ impl AsyncWrite for WriteHalf<'_> {
         Pin::new(&mut self.0).poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_close(cx)
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(self.0.shutdown(Shutdown::Write))
     }
 }
 
