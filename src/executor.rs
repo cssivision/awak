@@ -2,7 +2,7 @@ use std::future::Future;
 use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex, RwLock,
 };
 use std::task::{Context, Poll, Waker};
@@ -62,7 +62,7 @@ impl Executor {
         let ticker = Ticker {
             global: self.global.clone(),
             shard: Arc::new(ConcurrentQueue::bounded(512)),
-            sleeping: AtomicU64::new(0),
+            sleeping: AtomicUsize::new(0),
             ticks: AtomicUsize::new(0),
         };
 
@@ -100,10 +100,10 @@ struct Sleepers {
     /// Wakers of sleeping unnotified tickers.
     ///
     /// A sleeping ticker is notified when its callback is missing from this list.
-    wakers: Vec<(u64, Waker)>,
+    wakers: Vec<(usize, Waker)>,
 
     /// ID generator for sleepers.
-    id_gen: u64,
+    id_gen: usize,
 }
 
 impl Sleepers {
@@ -121,7 +121,7 @@ impl Sleepers {
     /// Re-inserts a sleeping ticker's waker if it was notified.
     ///
     /// Returns `true` if the ticker was notified.
-    fn update(&mut self, id: u64, waker: &Waker) -> bool {
+    fn update(&mut self, id: usize, waker: &Waker) -> bool {
         for item in &mut self.wakers {
             if item.0 == id {
                 if !item.1.will_wake(waker) {
@@ -141,7 +141,7 @@ impl Sleepers {
     }
 
     /// Removes a previously inserted sleeping ticker.
-    fn remove(&mut self, id: u64) {
+    fn remove(&mut self, id: usize) {
         self.count -= 1;
         for i in (0..self.wakers.len()).rev() {
             if self.wakers[i].0 == id {
@@ -152,7 +152,7 @@ impl Sleepers {
     }
 
     /// Inserts a new sleeping ticker.
-    fn insert(&mut self, waker: &Waker) -> u64 {
+    fn insert(&mut self, waker: &Waker) -> usize {
         let id = self.id_gen;
         self.id_gen += 1;
         self.count += 1;
@@ -192,7 +192,7 @@ pub struct Ticker {
     /// 1) Woken.
     /// 2a) Sleeping and unnotified.
     /// 2b) Sleeping and notified.
-    sleeping: AtomicU64,
+    sleeping: AtomicUsize,
 
     /// Bumped every time a task is run.
     ticks: AtomicUsize,
@@ -253,29 +253,27 @@ impl Ticker {
     /// Return a single task and returns `None` if one was found.
     async fn tick(&self) -> Runnable {
         poll_fn(|cx| {
-            loop {
-                match self.search() {
-                    None => {
-                        if !self.sleep(cx.waker()) {
-                            return Poll::Pending;
-                        }
+            match self.search() {
+                None => {
+                    self.sleep(cx.waker());
+
+                    Poll::Pending
+                }
+                Some(r) => {
+                    self.wake();
+
+                    // Notify another ticker now to pick up where this ticker left off, just in
+                    // case running the task takes a long time.
+                    self.global.notify();
+
+                    // Bump the ticker.
+                    let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
+                    // Steal tasks from the global queue to ensure fair task scheduling.
+                    if ticks % 64 == 0 {
+                        steal(&self.global.queue, &self.shard);
                     }
-                    Some(r) => {
-                        self.wake();
 
-                        // Notify another ticker now to pick up where this ticker left off, just in
-                        // case running the task takes a long time.
-                        self.global.notify();
-
-                        // Bump the ticker.
-                        let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
-                        // Steal tasks from the global queue to ensure fair task scheduling.
-                        if ticks % 64 == 0 {
-                            steal(&self.global.queue, &self.shard);
-                        }
-
-                        return Poll::Ready(r);
-                    }
+                    Poll::Ready(r)
                 }
             }
         })
