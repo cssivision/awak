@@ -1,12 +1,10 @@
 use std::io;
 use std::os::unix::io::RawFd;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cfg_if::cfg_if;
+use parking_lot::Mutex;
 
 macro_rules! syscall {
     ($fn:ident $args:tt) => {{
@@ -64,7 +62,7 @@ impl Poller {
     }
 
     pub fn wait(&self, events: &mut Vec<Event>, timeout: Option<Duration>) -> io::Result<usize> {
-        if let Ok(mut lock) = self.events.try_lock() {
+        if let Some(mut lock) = self.events.try_lock() {
             self.reactor.wait(&mut lock, timeout)?;
             self.notified.swap(false, Ordering::SeqCst);
 

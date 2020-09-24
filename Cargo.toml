@@ -20,3 +20,4 @@ socket2 = "0.3"
 cfg-if = "0.1"
 pin-project-lite = "0.1"
 futures-util = { version = "0.3", features = ["io"] }
+parking_lot = "0.11"

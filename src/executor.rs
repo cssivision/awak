@@ -3,13 +3,14 @@ use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex, RwLock,
+    Arc,
 };
 use std::task::{Context, Poll, Waker};
 
 use async_task::{Runnable, Task};
 use concurrent_queue::ConcurrentQueue;
 use futures_util::future::poll_fn;
+use parking_lot::{Mutex, RwLock};
 
 use rand::Rng;
 
@@ -66,11 +67,7 @@ impl Executor {
             ticks: AtomicUsize::new(0),
         };
 
-        self.global
-            .shards
-            .write()
-            .unwrap()
-            .push(ticker.shard.clone());
+        self.global.shards.write().push(ticker.shard.clone());
 
         ticker
     }
@@ -167,7 +164,7 @@ impl Global {
             .notified
             .compare_and_swap(false, true, Ordering::SeqCst)
         {
-            let waker = self.sleepers.lock().unwrap().notify();
+            let waker = self.sleepers.lock().notify();
             if let Some(waker) = waker {
                 waker.wake();
             }
@@ -203,7 +200,7 @@ impl Ticker {
     ///
     /// Returns `false` if the ticker was already sleeping and unnotified.
     fn sleep(&self, waker: &Waker) -> bool {
-        let mut sleepers = self.global.sleepers.lock().unwrap();
+        let mut sleepers = self.global.sleepers.lock();
 
         match self.sleeping.load(Ordering::SeqCst) {
             // Move to sleeping state.
@@ -231,7 +228,7 @@ impl Ticker {
             return;
         }
 
-        let mut sleepers = self.global.sleepers.lock().unwrap();
+        let mut sleepers = self.global.sleepers.lock();
         sleepers.remove(id);
 
         self.global
@@ -292,7 +289,7 @@ impl Ticker {
         }
 
         // Try stealing from other shards.
-        let shards = self.global.shards.read().unwrap();
+        let shards = self.global.shards.read();
 
         // Pick a random starting point in the iterator list and rotate the list.
         let n = shards.len();

@@ -5,7 +5,7 @@ use std::os::unix::io::RawFd;
 use std::panic;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex, MutexGuard,
+    Arc,
 };
 use std::task::{Poll, Waker};
 use std::thread;
@@ -17,6 +17,7 @@ use crate::parking;
 use concurrent_queue::ConcurrentQueue;
 use futures_util::future::poll_fn;
 use once_cell::sync::Lazy;
+use parking_lot::{Mutex, MutexGuard};
 use slab::Slab;
 
 pub(crate) struct Reactor {
@@ -81,11 +82,11 @@ impl ReactorLock<'_> {
             }
 
             Ok(_) => {
-                let sources = self.reactor.sources.lock().unwrap();
+                let sources = self.reactor.sources.lock();
 
                 for ev in self.events.iter() {
                     if let Some(source) = sources.get(ev.key) {
-                        let mut w = source.wakers.lock().unwrap();
+                        let mut w = source.wakers.lock();
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
@@ -196,13 +197,13 @@ impl Reactor {
 
     fn lock(&self) -> ReactorLock<'_> {
         let reactor = self;
-        let events = self.events.lock().unwrap();
+        let events = self.events.lock();
         ReactorLock { reactor, events }
     }
 
     /// Attempts to lock the reactor.
     pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
-        self.events.try_lock().ok().map(|events| {
+        self.events.try_lock().map(|events| {
             let reactor = self;
             ReactorLock { reactor, events }
         })
@@ -215,7 +216,7 @@ impl Reactor {
     pub fn insert_io(&self, raw: RawFd) -> io::Result<Arc<Source>> {
         self.poller.insert(raw)?;
 
-        let mut sources = self.sources.lock().unwrap();
+        let mut sources = self.sources.lock();
         let entry = sources.vacant_entry();
         let key = entry.key();
 
@@ -236,7 +237,7 @@ impl Reactor {
     }
 
     pub fn remove_io(&self, source: &Source) -> io::Result<()> {
-        let mut sources = self.sources.lock().unwrap();
+        let mut sources = self.sources.lock();
         sources.remove(source.key);
         self.poller.remove(source.raw)
     }
@@ -251,7 +252,7 @@ impl Reactor {
             .push(TimerOp::Insert(when, id, waker.clone()))
             .is_err()
         {
-            let mut timers = self.timers.lock().unwrap();
+            let mut timers = self.timers.lock();
             self.process_timer_ops(&mut timers);
         }
         self.notify();
@@ -261,13 +262,13 @@ impl Reactor {
 
     pub fn remove_timer(&self, when: Instant, id: usize) {
         while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
-            let mut timers = self.timers.lock().unwrap();
+            let mut timers = self.timers.lock();
             self.process_timer_ops(&mut timers);
         }
     }
 
     fn process_timers(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
-        let mut timers = self.timers.lock().unwrap();
+        let mut timers = self.timers.lock();
         self.process_timer_ops(&mut timers);
 
         let now = Instant::now();
@@ -341,7 +342,7 @@ impl Source {
         let mut ticks = None;
 
         poll_fn(|cx| {
-            let mut w = self.wakers.lock().unwrap();
+            let mut w = self.wakers.lock();
 
             if let Some((a, b)) = ticks {
                 if w.tick_readable != a && w.tick_readable != b {
@@ -373,7 +374,7 @@ impl Source {
         let mut ticks = None;
 
         poll_fn(|cx| {
-            let mut w = self.wakers.lock().unwrap();
+            let mut w = self.wakers.lock();
 
             if let Some((a, b)) = ticks {
                 if w.tick_writable != a && w.tick_writable != b {
