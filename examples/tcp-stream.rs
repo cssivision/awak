@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use awak::io::AsyncReadExt;
 use awak::net::TcpStream;
+use awak::time::delay_for;
 
 fn main() {
     awak::block_on(async {
@@ -7,9 +10,10 @@ fn main() {
 
         loop {
             let mut buf = vec![0; 10];
-            stream.read_exact(&mut buf).await.unwrap();
-            println!("{:?}", buf);
-            awak::time::delay_for(std::time::Duration::from_secs(1)).await;
+            let n = stream.read_exact(&mut buf).await.unwrap();
+            println!("read {:?} bytes", n);
+
+            delay_for(Duration::from_secs(1)).await;
         }
     });
 }

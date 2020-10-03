@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use awak::io::AsyncWriteExt;
 use awak::net::TcpListener;
+use awak::time::delay_for;
 use awak::StreamExt;
 
 fn main() {
@@ -11,12 +14,15 @@ fn main() {
             while let Some(stream) = listener.incoming().next().await {
                 match stream {
                     Ok(mut stream) => {
-                        awak::spawn(async move {
+                        let task = awak::spawn(async move {
                             loop {
-                                awak::time::delay_for(std::time::Duration::from_secs(1)).await;
-                                let _ = stream.write_all(b"helloworld").await;
+                                delay_for(Duration::from_secs(1)).await;
+                                let n = stream.write_all(b"helloworld").await.unwrap();
+                                println!("write {:?} bytes", n);
                             }
                         });
+
+                        task.detach();
                     }
                     Err(e) => {
                         println!("err: {}", e);
