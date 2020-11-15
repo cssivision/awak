@@ -17,8 +17,16 @@ fn main() {
                         let task = awak::spawn(async move {
                             loop {
                                 delay_for(Duration::from_secs(1)).await;
-                                let n = stream.write_all(b"helloworld").await.unwrap();
-                                println!("write {:?} bytes", n);
+
+                                match stream.write_all(b"helloworld").await {
+                                    Ok(_) => {
+                                        println!("write bytes succ");
+                                    }
+                                    Err(e) => {
+                                        println!("write bytes err: {:?}", e);
+                                        break;
+                                    }
+                                }
                             }
                         });
 

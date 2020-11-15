@@ -10,8 +10,8 @@ fn main() {
 
         loop {
             let mut buf = vec![0; 10];
-            let n = stream.read_exact(&mut buf).await.unwrap();
-            println!("read {:?} bytes", n);
+            stream.read_exact(&mut buf).await.unwrap();
+            println!("read bytes: {:?}", buf);
 
             delay_for(Duration::from_secs(1)).await;
         }
