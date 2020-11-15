@@ -191,7 +191,7 @@ impl Events {
     /// Creates an empty list.
     pub fn new() -> Events {
         let ev = libc::kevent {
-            ident: 0 as _,
+            ident: 0_usize,
             filter: 0,
             flags: 0,
             fflags: 0,
