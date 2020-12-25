@@ -160,7 +160,7 @@ impl Sleepers {
 
 impl Global {
     fn notify(&self) {
-        if !self
+        if self
             .notified
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()

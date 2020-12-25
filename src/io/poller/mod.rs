@@ -75,7 +75,7 @@ impl Poller {
     }
 
     pub fn notify(&self) -> io::Result<()> {
-        if !self
+        if self
             .notified
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
