@@ -294,7 +294,7 @@ impl Ticker {
 
         // Pick a random starting point in the iterator list and rotate the list.
         let n = shards.len();
-        let start = rand::thread_rng().gen_range(0, n);
+        let start = rand::thread_rng().gen_range(0..n);
         let iter = shards
             .iter()
             .chain(shards.iter())
