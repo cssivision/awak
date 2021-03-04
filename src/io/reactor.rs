@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::io;
 use std::mem;
 use std::os::unix::io::RawFd;
-use std::panic;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -122,8 +121,7 @@ impl ReactorLock<'_> {
 
         // Wake up ready tasks.
         for waker in wakers {
-            // Don't let a panicking waker blow everything up.
-            let _ = panic::catch_unwind(|| waker.wake());
+            waker.wake();
         }
 
         res
