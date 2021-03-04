@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -172,8 +171,6 @@ impl Global {
         }
     }
 }
-
-impl UnwindSafe for Ticker {}
 
 /// Runs tasks in a multi-threaded executor.
 #[derive(Debug)]
