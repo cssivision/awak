@@ -24,8 +24,8 @@ impl Reactor {
         write_stream.set_nonblocking(true)?;
         let reactor = Reactor {
             kqueue_fd,
-            read_stream,
             write_stream,
+            read_stream,
         };
         reactor.interest(reactor.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
 
