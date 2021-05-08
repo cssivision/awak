@@ -32,6 +32,8 @@ impl TcpStream {
 
         let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
 
+        socket.set_nonblocking(true)?;
+
         socket.connect(&addr.into()).or_else(|err| {
             let in_progress = err.raw_os_error() == Some(libc::EINPROGRESS);
 
