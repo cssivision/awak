@@ -89,13 +89,13 @@ impl ReactorLock<'_> {
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
-                            w.tick_readable = tick;
+                            w.tick_readable = tick + 1;
                             wakers.append(&mut w.readers);
                         }
 
                         // Wake writers if a writability event was emitted.
                         if ev.writable {
-                            w.tick_writable = tick;
+                            w.tick_writable = tick + 1;
                             wakers.append(&mut w.writers);
                         }
 
@@ -348,11 +348,7 @@ impl Source {
                 }
             }
 
-            if w.readers.is_empty() {
-                // no readers, register in reactor
-                Reactor::get().interest(self.raw, self.key, true, !w.writers.is_empty())?;
-            }
-
+            let was_empty = w.readers.is_empty();
             if w.readers.iter().all(|w| !w.will_wake(cx.waker())) {
                 w.readers.push(cx.waker().clone());
             }
@@ -363,6 +359,12 @@ impl Source {
                     w.tick_readable,
                 ));
             }
+
+            if was_empty {
+                // no readers, register in reactor
+                Reactor::get().interest(self.raw, self.key, true, !w.writers.is_empty())?;
+            }
+
             Poll::Pending
         })
         .await
@@ -373,17 +375,13 @@ impl Source {
 
         poll_fn(|cx| {
             let mut w = self.wakers.lock();
-
             if let Some((a, b)) = ticks {
                 if w.tick_writable != a && w.tick_writable != b {
                     return Poll::Ready(Ok(()));
                 }
             }
 
-            if w.writers.is_empty() {
-                // no writer, register in reactor
-                Reactor::get().interest(self.raw, self.key, !w.readers.is_empty(), true)?;
-            }
+            let was_empty = w.writers.is_empty();
 
             if w.writers.iter().all(|w| !w.will_wake(cx.waker())) {
                 w.writers.push(cx.waker().clone());
@@ -395,6 +393,12 @@ impl Source {
                     w.tick_writable,
                 ));
             }
+
+            if was_empty {
+                // no writer, register in reactor
+                Reactor::get().interest(self.raw, self.key, !w.readers.is_empty(), true)?;
+            }
+
             Poll::Pending
         })
         .await

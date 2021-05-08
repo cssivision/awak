@@ -37,6 +37,7 @@ cfg_if! {
 }
 
 /// An event reported by epoll/kqueue/wepoll.
+#[derive(Debug)]
 pub struct Event {
     /// Key passed when registering interest in the I/O handle.
     pub key: usize,
