@@ -247,20 +247,14 @@ impl Timer {
             Reactor::get().remove_timer(self.deadline, self.key);
             self.key = Reactor::get().insert_timer(when, waker);
         }
-
         self.deadline = when;
     }
-}
 
-impl Future for Timer {
-    type Output = Instant;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    pub fn poll_timeout(&mut self, cx: &mut Context) -> Poll<Instant> {
         if self.deadline <= Instant::now() {
             if self.key > 0 {
                 Reactor::get().remove_timer(self.deadline, self.key);
             }
-
             Poll::Ready(self.deadline)
         } else {
             match self.waker {
@@ -276,7 +270,6 @@ impl Future for Timer {
                 }
                 _ => {}
             }
-
             Poll::Pending
         }
     }
