@@ -1,10 +1,7 @@
 use std::io;
-use std::mem::ManuallyDrop;
 use std::net::{self, Shutdown, SocketAddr, ToSocketAddrs};
-use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use crate::io::Async;
 
@@ -24,30 +21,19 @@ impl TcpStream {
     }
 
     async fn connect_addr(addr: SocketAddr) -> io::Result<TcpStream> {
-        let domain = if addr.is_ipv6() {
-            Domain::ipv6()
-        } else {
-            Domain::ipv4()
-        };
-
-        let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
-
+        let domain = Domain::for_address(addr);
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
         socket.set_nonblocking(true)?;
+        match socket.connect(&addr.into()) {
+            Ok(_) => {}
+            #[cfg(unix)]
+            Err(err) if err.raw_os_error() == Some(libc::EINPROGRESS) => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+            Err(err) => return Err(err),
+        }
 
-        socket.connect(&addr.into()).or_else(|err| {
-            let in_progress = err.raw_os_error() == Some(libc::EINPROGRESS);
-
-            if in_progress {
-                Ok(())
-            } else {
-                Err(err)
-            }
-        })?;
-
-        let stream = Async::new(socket.into_tcp_stream())?;
-
+        let stream = Async::new(net::TcpStream::from(socket))?;
         stream.writable().await?;
-
         match stream.get_ref().take_error()? {
             None => Ok(TcpStream { inner: stream }),
             Some(err) => Err(err),
@@ -96,19 +82,6 @@ impl TcpStream {
 
     pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
         self.inner.get_ref().set_nodelay(nodelay)
-    }
-
-    pub fn set_keepalive(&self, keepalive: Option<Duration>) -> io::Result<()> {
-        self.as_socket().set_keepalive(keepalive)
-    }
-
-    pub fn keepalive(&self) -> io::Result<Option<Duration>> {
-        self.as_socket().keepalive()
-    }
-
-    fn as_socket(&self) -> ManuallyDrop<Socket> {
-        let raw_fd = self.inner.get_ref().as_raw_fd();
-        unsafe { ManuallyDrop::new(Socket::from_raw_fd(raw_fd)) }
     }
 
     pub fn split(&mut self) -> (ReadHalf<'_>, WriteHalf<'_>) {
