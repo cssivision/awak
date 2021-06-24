@@ -19,7 +19,6 @@ impl UdpSocket {
                 Err(e) => last_err = Some(e),
             }
         }
-
         Err(last_err.unwrap_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -44,7 +43,7 @@ impl UdpSocket {
         self.inner.get_ref().local_addr()
     }
 
-    pub async fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
+    pub fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
         let addrs = addr.to_socket_addrs()?;
         let mut last_err = None;
 
@@ -54,7 +53,6 @@ impl UdpSocket {
                 Err(e) => last_err = Some(e),
             }
         }
-
         Err(last_err.unwrap_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -77,7 +75,6 @@ impl UdpSocket {
 
     pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], target: A) -> io::Result<usize> {
         let addr = target.into();
-
         self.inner.write_with(|io| io.send_to(buf, addr)).await
     }
 }
