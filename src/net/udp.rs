@@ -9,12 +9,12 @@ pub struct UdpSocket {
 }
 
 impl UdpSocket {
-    pub async fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
         let addrs = addr.to_socket_addrs()?;
         let mut last_err = None;
 
         for addr in addrs {
-            match UdpSocket::bind_addr(addr).await {
+            match UdpSocket::bind_addr(addr) {
                 Ok(socket) => return Ok(socket),
                 Err(e) => last_err = Some(e),
             }
@@ -28,7 +28,7 @@ impl UdpSocket {
         }))
     }
 
-    async fn bind_addr(addr: SocketAddr) -> io::Result<UdpSocket> {
+    fn bind_addr(addr: SocketAddr) -> io::Result<UdpSocket> {
         Ok(UdpSocket {
             inner: Async::new(net::UdpSocket::bind(addr)?)?,
         })
