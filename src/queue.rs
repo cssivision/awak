@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 #[derive(Debug)]
 pub struct Queue<T> {
-    inner: Mutex<VecDeque<T>>,
+    inner: RwLock<VecDeque<T>>,
 }
 
 impl<T> Queue<T> {
@@ -13,23 +13,23 @@ impl<T> Queue<T> {
 
     pub fn with_capacity(n: usize) -> Queue<T> {
         Queue {
-            inner: Mutex::new(VecDeque::with_capacity(n)),
+            inner: RwLock::new(VecDeque::with_capacity(n)),
         }
     }
 
     pub fn pop(&self) -> Option<T> {
-        self.inner.lock().unwrap().pop_front()
+        self.inner.write().unwrap().pop_front()
     }
 
     pub fn push(&self, value: T) {
-        self.inner.lock().unwrap().push_back(value)
+        self.inner.write().unwrap().push_back(value)
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.inner.read().unwrap().len()
     }
 
     pub fn capacity(&self) -> usize {
-        self.inner.lock().unwrap().capacity()
+        self.inner.read().unwrap().capacity()
     }
 }
