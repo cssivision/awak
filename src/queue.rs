@@ -2,17 +2,17 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 #[derive(Debug)]
-pub struct ConcurrentQueue<T> {
+pub struct Queue<T> {
     inner: Mutex<VecDeque<T>>,
 }
 
-impl<T> ConcurrentQueue<T> {
-    pub fn new() -> ConcurrentQueue<T> {
-        ConcurrentQueue::with_capacity(0)
+impl<T> Queue<T> {
+    pub fn new() -> Queue<T> {
+        Queue::with_capacity(0)
     }
 
-    pub fn with_capacity(n: usize) -> ConcurrentQueue<T> {
-        ConcurrentQueue {
+    pub fn with_capacity(n: usize) -> Queue<T> {
+        Queue {
             inner: Mutex::new(VecDeque::with_capacity(n)),
         }
     }

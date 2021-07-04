@@ -8,7 +8,7 @@ use async_task::{Runnable, Task};
 use futures_util::future::poll_fn;
 use rand::Rng;
 
-use crate::queue::ConcurrentQueue;
+use crate::queue::Queue;
 
 /// A multi-threaded executor.
 #[derive(Debug)]
@@ -26,7 +26,7 @@ impl Executor {
     pub fn new() -> Executor {
         Executor {
             global: Arc::new(Global {
-                queue: ConcurrentQueue::new(),
+                queue: Queue::new(),
                 notified: AtomicBool::new(false),
                 shards: RwLock::new(Vec::new()),
                 sleepers: Mutex::new(Sleepers {
@@ -56,7 +56,7 @@ impl Executor {
     pub fn ticker(&self) -> Ticker {
         let ticker = Ticker {
             global: self.global.clone(),
-            shard: Arc::new(ConcurrentQueue::with_capacity(512)),
+            shard: Arc::new(Queue::with_capacity(512)),
             sleeping: AtomicUsize::new(0),
             ticks: AtomicUsize::new(0),
         };
@@ -72,13 +72,13 @@ impl Executor {
 #[derive(Debug)]
 struct Global {
     /// The global queue.
-    queue: ConcurrentQueue<Runnable>,
+    queue: Queue<Runnable>,
 
     /// Set to `true` when a sleeping ticker is notified or no tickers are sleeping.
     notified: AtomicBool,
 
     /// Shards of the global queue created by tickers.
-    shards: RwLock<Vec<Arc<ConcurrentQueue<Runnable>>>>,
+    shards: RwLock<Vec<Arc<Queue<Runnable>>>>,
 
     /// A list of sleeping tickers.
     sleepers: Mutex<Sleepers>,
@@ -176,7 +176,7 @@ pub struct Ticker {
     global: Arc<Global>,
 
     /// A shard of the global queue.
-    shard: Arc<ConcurrentQueue<Runnable>>,
+    shard: Arc<Queue<Runnable>>,
 
     /// Set to `sleeper's id` when in sleeping state.
     ///
@@ -309,7 +309,7 @@ impl Ticker {
 }
 
 /// Steals some items from one queue into another.
-fn steal<T>(src: &ConcurrentQueue<T>, dest: &ConcurrentQueue<T>) {
+fn steal<T>(src: &Queue<T>, dest: &Queue<T>) {
     // Half of `src`'s length rounded up.
     let mut count = (src.len() + 1) / 2;
 

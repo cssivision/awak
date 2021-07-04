@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::poller::{Event, Poller};
 use crate::parking;
-use crate::queue::ConcurrentQueue;
+use crate::queue::Queue;
 
 use futures_util::future::poll_fn;
 use once_cell::sync::Lazy;
@@ -27,7 +27,7 @@ pub(crate) struct Reactor {
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
     events: Mutex<Vec<Event>>,
-    timer_ops: ConcurrentQueue<TimerOp>,
+    timer_ops: Queue<TimerOp>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 }
 
@@ -186,7 +186,7 @@ impl Reactor {
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
                 events: Mutex::new(Vec::new()),
-                timer_ops: ConcurrentQueue::with_capacity(DEFAULT_TIME_OP_SIZE),
+                timer_ops: Queue::with_capacity(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
         });
