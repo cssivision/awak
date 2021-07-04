@@ -1,15 +1,14 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, Waker};
 
 use async_task::{Runnable, Task};
-use concurrent_queue::ConcurrentQueue;
 use futures_util::future::poll_fn;
-use parking_lot::{Mutex, RwLock};
-
 use rand::Rng;
+
+use crate::queue::ConcurrentQueue;
 
 /// A multi-threaded executor.
 #[derive(Debug)]
@@ -27,7 +26,7 @@ impl Executor {
     pub fn new() -> Executor {
         Executor {
             global: Arc::new(Global {
-                queue: ConcurrentQueue::unbounded(),
+                queue: ConcurrentQueue::new(),
                 notified: AtomicBool::new(false),
                 shards: RwLock::new(Vec::new()),
                 sleepers: Mutex::new(Sleepers {
@@ -44,28 +43,28 @@ impl Executor {
         future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         let global = self.global.clone();
-
         let schedule = move |runnable| {
-            global.queue.push(runnable).unwrap();
+            global.queue.push(runnable);
             global.notify();
         };
 
         let (runnable, task) = async_task::spawn(future, schedule);
         runnable.schedule();
-
         task
     }
 
     pub fn ticker(&self) -> Ticker {
         let ticker = Ticker {
             global: self.global.clone(),
-            shard: Arc::new(ConcurrentQueue::bounded(512)),
+            shard: Arc::new(ConcurrentQueue::with_capacity(512)),
             sleeping: AtomicUsize::new(0),
             ticks: AtomicUsize::new(0),
         };
-
-        self.global.shards.write().push(ticker.shard.clone());
-
+        self.global
+            .shards
+            .write()
+            .unwrap()
+            .push(ticker.shard.clone());
         ticker
     }
 }
@@ -162,7 +161,7 @@ impl Global {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            let waker = self.sleepers.lock().notify();
+            let waker = self.sleepers.lock().unwrap().notify();
             if let Some(waker) = waker {
                 waker.wake();
             }
@@ -196,7 +195,7 @@ impl Ticker {
     ///
     /// Returns `false` if the ticker was already sleeping and unnotified.
     fn sleep(&self, waker: &Waker) -> bool {
-        let mut sleepers = self.global.sleepers.lock();
+        let mut sleepers = self.global.sleepers.lock().unwrap();
 
         match self.sleeping.load(Ordering::SeqCst) {
             // Move to sleeping state.
@@ -224,7 +223,7 @@ impl Ticker {
             return;
         }
 
-        let mut sleepers = self.global.sleepers.lock();
+        let mut sleepers = self.global.sleepers.lock().unwrap();
         sleepers.remove(id);
 
         self.global
@@ -275,17 +274,17 @@ impl Ticker {
 
     /// Finds the next task to run.
     fn search(&self) -> Option<Runnable> {
-        if let Ok(r) = self.shard.pop() {
+        if let Some(r) = self.shard.pop() {
             return Some(r);
         }
 
         // Try stealing from the global queue.
-        if let Ok(r) = self.global.queue.pop() {
+        if let Some(r) = self.global.queue.pop() {
             return Some(r);
         }
 
         // Try stealing from other shards.
-        let shards = self.global.shards.read();
+        let shards = self.global.shards.read().unwrap();
 
         // Pick a random starting point in the iterator list and rotate the list.
         let n = shards.len();
@@ -300,7 +299,7 @@ impl Ticker {
         // Try stealing from each shard in the list.
         for shard in iter {
             steal(shard, &self.shard);
-            if let Ok(r) = self.shard.pop() {
+            if let Some(r) = self.shard.pop() {
                 return Some(r);
             }
         }
@@ -316,14 +315,10 @@ fn steal<T>(src: &ConcurrentQueue<T>, dest: &ConcurrentQueue<T>) {
 
     if count > 0 {
         // Don't steal more than fits into the queue.
-        if let Some(cap) = dest.capacity() {
-            count = count.min(cap - dest.len());
-        }
-
-        // Steal tasks.
+        count = count.min(dest.capacity() - dest.len());
         for _ in 0..count {
-            if let Ok(t) = src.pop() {
-                assert!(dest.push(t).is_ok());
+            if let Some(t) = src.pop() {
+                dest.push(t);
             } else {
                 break;
             }

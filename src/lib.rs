@@ -27,6 +27,7 @@ pub mod executor;
 pub mod io;
 pub mod net;
 mod parking;
+mod queue;
 pub mod time;
 mod waker_fn;
 
@@ -38,7 +39,6 @@ pub use blocking::block_on;
 pub use executor::Executor;
 
 pub use futures_util::stream::StreamExt;
-
 use once_cell::sync::Lazy;
 
 pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {

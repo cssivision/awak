@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
-
-use parking_lot::{Condvar, Mutex};
 
 pub fn pair() -> (Parker, Unparker) {
     let p = Parker::new();
@@ -84,8 +82,6 @@ impl Inner {
             }
         }
 
-        let mut m = self.lock.lock();
-
         match self.state.compare_exchange(EMPTY, PARKED, SeqCst, SeqCst) {
             Ok(_) => {}
             Err(NOTIFIED) => {
@@ -96,9 +92,10 @@ impl Inner {
             Err(_) => panic!("invalid park state"),
         }
 
+        let mut m = self.lock.lock().unwrap();
         match timeout {
             None => loop {
-                self.cvar.wait(&mut m);
+                m = self.cvar.wait(m).unwrap();
 
                 if self
                     .state
@@ -112,7 +109,7 @@ impl Inner {
                 // Wait with a timeout, and if we spuriously wake up or otherwise wake up from a
                 // notification we just want to unconditionally set `state` back to `EMPTY`, either
                 // consuming a notification or un-flagging ourselves as parked.
-                let _result = self.cvar.wait_for(&mut m, d);
+                let _result = self.cvar.wait_timeout(m, d);
 
                 match self.state.swap(EMPTY, SeqCst) {
                     NOTIFIED => true, // got a notification

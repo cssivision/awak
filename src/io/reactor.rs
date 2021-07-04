@@ -4,7 +4,7 @@ use std::mem;
 use std::os::unix::io::RawFd;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex, MutexGuard,
 };
 use std::task::{Poll, Waker};
 use std::thread;
@@ -12,12 +12,13 @@ use std::time::{Duration, Instant};
 
 use super::poller::{Event, Poller};
 use crate::parking;
+use crate::queue::ConcurrentQueue;
 
-use concurrent_queue::ConcurrentQueue;
 use futures_util::future::poll_fn;
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, MutexGuard};
 use slab::Slab;
+
+const DEFAULT_TIME_OP_SIZE: usize = 1000;
 
 pub(crate) struct Reactor {
     pub block_on_count: AtomicUsize,
@@ -81,11 +82,11 @@ impl ReactorLock<'_> {
             }
 
             Ok(_) => {
-                let sources = self.reactor.sources.lock();
+                let sources = self.reactor.sources.lock().unwrap();
 
                 for ev in self.events.iter() {
                     if let Some(source) = sources.get(ev.key) {
-                        let mut w = source.wakers.lock();
+                        let mut w = source.wakers.lock().unwrap();
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
@@ -185,7 +186,7 @@ impl Reactor {
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
                 events: Mutex::new(Vec::new()),
-                timer_ops: ConcurrentQueue::bounded(1000),
+                timer_ops: ConcurrentQueue::with_capacity(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
         });
@@ -195,16 +196,19 @@ impl Reactor {
 
     fn lock(&self) -> ReactorLock<'_> {
         let reactor = self;
-        let events = self.events.lock();
+        let events = self.events.lock().unwrap();
         ReactorLock { reactor, events }
     }
 
     /// Attempts to lock the reactor.
     pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
-        self.events.try_lock().map(|events| {
-            let reactor = self;
-            ReactorLock { reactor, events }
-        })
+        self.events
+            .try_lock()
+            .map(|events| {
+                let reactor = self;
+                ReactorLock { reactor, events }
+            })
+            .ok()
     }
 
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
@@ -214,7 +218,7 @@ impl Reactor {
     pub fn insert_io(&self, raw: RawFd) -> io::Result<Arc<Source>> {
         self.poller.insert(raw)?;
 
-        let mut sources = self.sources.lock();
+        let mut sources = self.sources.lock().unwrap();
         let entry = sources.vacant_entry();
         let key = entry.key();
 
@@ -230,12 +234,11 @@ impl Reactor {
         });
 
         entry.insert(source.clone());
-
         Ok(source)
     }
 
     pub fn remove_io(&self, source: &Source) -> io::Result<()> {
-        let mut sources = self.sources.lock();
+        let mut sources = self.sources.lock().unwrap();
         sources.remove(source.key);
         self.poller.remove(source.raw)
     }
@@ -245,35 +248,32 @@ impl Reactor {
         static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
 
-        while self
-            .timer_ops
-            .push(TimerOp::Insert(when, id, waker.clone()))
-            .is_err()
-        {
-            let mut timers = self.timers.lock();
+        self.timer_ops
+            .push(TimerOp::Insert(when, id, waker.clone()));
+        if self.timer_ops.len() >= DEFAULT_TIME_OP_SIZE {
+            let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
         }
         self.notify();
-
         id
     }
 
     pub fn remove_timer(&self, when: Instant, id: usize) {
-        while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
-            let mut timers = self.timers.lock();
+        self.timer_ops.push(TimerOp::Remove(when, id));
+        if self.timer_ops.len() >= DEFAULT_TIME_OP_SIZE {
+            let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
         }
     }
 
     fn process_timers(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
-        let mut timers = self.timers.lock();
+        let mut timers = self.timers.lock().unwrap();
         self.process_timer_ops(&mut timers);
 
         let now = Instant::now();
 
         // Split timers into ready and pending timers.
         let pending = timers.split_off(&(now, 0));
-
         let ready = mem::replace(&mut *timers, pending);
 
         let dur = if ready.is_empty() {
@@ -284,26 +284,24 @@ impl Reactor {
         } else {
             Some(Duration::from_secs(0))
         };
-
         drop(timers);
 
         for (_, waker) in ready {
             wakers.push(waker);
         }
-
         dur
     }
 
     fn process_timer_ops(&self, timers: &mut MutexGuard<'_, BTreeMap<(Instant, usize), Waker>>) {
-        for _ in 0..self.timer_ops.capacity().unwrap() {
+        for _ in 0..self.timer_ops.capacity() {
             match self.timer_ops.pop() {
-                Ok(TimerOp::Insert(when, id, waker)) => {
+                Some(TimerOp::Insert(when, id, waker)) => {
                     timers.insert((when, id), waker);
                 }
-                Ok(TimerOp::Remove(when, id)) => {
+                Some(TimerOp::Remove(when, id)) => {
                     timers.remove(&(when, id));
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     }
@@ -340,7 +338,7 @@ impl Source {
         let mut ticks = None;
 
         poll_fn(|cx| {
-            let mut w = self.wakers.lock();
+            let mut w = self.wakers.lock().unwrap();
 
             if let Some((a, b)) = ticks {
                 if w.tick_readable != a && w.tick_readable != b {
@@ -374,7 +372,7 @@ impl Source {
         let mut ticks = None;
 
         poll_fn(|cx| {
-            let mut w = self.wakers.lock();
+            let mut w = self.wakers.lock().unwrap();
             if let Some((a, b)) = ticks {
                 if w.tick_writable != a && w.tick_writable != b {
                     return Poll::Ready(Ok(()));
