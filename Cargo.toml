@@ -18,4 +18,4 @@ slab = "0.4"
 socket2 = "0.4"
 cfg-if = "0.1"
 pin-project-lite = "0.2"
-futures-util = { version = "0.3", features = ["io"] }
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
