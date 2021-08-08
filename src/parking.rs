@@ -82,6 +82,8 @@ impl Inner {
             }
         }
 
+        let mut m = self.lock.lock().unwrap();
+
         match self.state.compare_exchange(EMPTY, PARKED, SeqCst, SeqCst) {
             Ok(_) => {}
             Err(NOTIFIED) => {
@@ -92,7 +94,6 @@ impl Inner {
             Err(_) => panic!("invalid park state"),
         }
 
-        let mut m = self.lock.lock().unwrap();
         match timeout {
             None => loop {
                 m = self.cvar.wait(m).unwrap();
