@@ -196,7 +196,6 @@ impl Ticker {
     /// Returns `false` if the ticker was already sleeping and unnotified.
     fn sleep(&self, waker: &Waker) -> bool {
         let mut sleepers = self.global.sleepers.lock().unwrap();
-
         match self.sleeping.load(Ordering::SeqCst) {
             // Move to sleeping state.
             0 => self
@@ -209,11 +208,9 @@ impl Ticker {
                 }
             }
         }
-
         self.global
             .notified
             .swap(sleepers.is_notified(), Ordering::SeqCst);
-
         true
     }
 
@@ -222,10 +219,8 @@ impl Ticker {
         if id == 0 {
             return;
         }
-
         let mut sleepers = self.global.sleepers.lock().unwrap();
         sleepers.remove(id);
-
         self.global
             .notified
             .swap(sleepers.is_notified(), Ordering::SeqCst);
@@ -237,7 +232,6 @@ impl Ticker {
                 let runnable = self.tick().await;
                 runnable.run();
             }
-
             yield_now().await;
         }
     }
@@ -253,18 +247,15 @@ impl Ticker {
                 }
                 Some(r) => {
                     self.wake();
-
                     // Notify another ticker now to pick up where this ticker left off, just in
                     // case running the task takes a long time.
                     self.global.notify();
-
                     // Bump the ticker.
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks % 64 == 0 {
                         steal(&self.global.queue, &self.shard);
                     }
-
                     Poll::Ready(r)
                 }
             }

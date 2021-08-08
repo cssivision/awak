@@ -109,7 +109,7 @@ impl Inner {
                 // Wait with a timeout, and if we spuriously wake up or otherwise wake up from a
                 // notification we just want to unconditionally set `state` back to `EMPTY`, either
                 // consuming a notification or un-flagging ourselves as parked.
-                let _result = self.cvar.wait_timeout(m, d);
+                let (_m, _result) = self.cvar.wait_timeout(m, d).unwrap();
 
                 match self.state.swap(EMPTY, SeqCst) {
                     NOTIFIED => true, // got a notification
@@ -140,7 +140,7 @@ impl Inner {
         //
         // Releasing `lock` before the call to `notify_one` means that when the parked thread wakes
         // it doesn't get woken only to have to wait for us to release `lock`.
-        drop(self.lock.lock());
+        drop(self.lock.lock().unwrap());
         self.cvar.notify_one();
 
         true
