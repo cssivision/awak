@@ -10,13 +10,11 @@ use futures_util::stream::Stream;
 
 pub fn interval(period: Duration) -> Interval {
     assert!(period > Duration::new(0, 0), "`period` must be non-zero.");
-
     interval_at(Instant::now(), period)
 }
 
 pub fn interval_at(start: Instant, period: Duration) -> Interval {
     assert!(period > Duration::new(0, 0), "`period` must be non-zero.");
-
     Interval {
         delay: delay_until(start),
         period,
@@ -34,7 +32,6 @@ impl Interval {
         let now = self.delay.deadline();
         let next = now + self.period;
         self.delay.reset(next);
-
         Poll::Ready(now)
     }
 

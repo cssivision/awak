@@ -294,7 +294,6 @@ impl Ticker {
                 return Some(r);
             }
         }
-
         None
     }
 }
@@ -303,7 +302,6 @@ impl Ticker {
 fn steal<T>(src: &Queue<T>, dest: &Queue<T>) {
     // Half of `src`'s length rounded up.
     let mut count = (src.len() + 1) / 2;
-
     if count > 0 {
         // Don't steal more than fits into the queue.
         count = count.min(dest.capacity() - dest.len());

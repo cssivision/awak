@@ -75,15 +75,12 @@ impl Inner {
         {
             return true;
         }
-
         if let Some(d) = timeout {
             if d == Duration::from_secs(0) {
                 return false;
             }
         }
-
         let mut m = self.lock.lock().unwrap();
-
         match self.state.compare_exchange(EMPTY, PARKED, SeqCst, SeqCst) {
             Ok(_) => {}
             Err(NOTIFIED) => {
@@ -97,7 +94,6 @@ impl Inner {
         match timeout {
             None => loop {
                 m = self.cvar.wait(m).unwrap();
-
                 if self
                     .state
                     .compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst)
@@ -111,7 +107,6 @@ impl Inner {
                 // notification we just want to unconditionally set `state` back to `EMPTY`, either
                 // consuming a notification or un-flagging ourselves as parked.
                 let (_m, _result) = self.cvar.wait_timeout(m, d).unwrap();
-
                 match self.state.swap(EMPTY, SeqCst) {
                     NOTIFIED => true, // got a notification
                     PARKED => false,  // no notification
@@ -143,7 +138,6 @@ impl Inner {
         // it doesn't get woken only to have to wait for us to release `lock`.
         drop(self.lock.lock().unwrap());
         self.cvar.notify_one();
-
         true
     }
 }

@@ -78,7 +78,6 @@ where
         if let Poll::Ready(v) = this.value.poll(cx) {
             return Poll::Ready(Ok(v));
         }
-
         match this.delay.poll(cx) {
             Poll::Ready(()) => Poll::Ready(Err(Elapsed(()))),
             Poll::Pending => Poll::Pending,

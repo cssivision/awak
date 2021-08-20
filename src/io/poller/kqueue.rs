@@ -18,7 +18,6 @@ impl Reactor {
     pub fn new() -> io::Result<Reactor> {
         let kqueue_fd = syscall!(kqueue())?;
         syscall!(fcntl(kqueue_fd, libc::F_SETFD, libc::FD_CLOEXEC))?;
-
         let (read_stream, write_stream) = UnixStream::pair()?;
         read_stream.set_nonblocking(true)?;
         write_stream.set_nonblocking(true)?;
@@ -28,7 +27,6 @@ impl Reactor {
             read_stream,
         };
         reactor.interest(reactor.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
-
         Ok(reactor)
     }
 
@@ -47,7 +45,6 @@ impl Reactor {
     ) -> io::Result<()> {
         let mut read_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
         let mut write_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
-
         if readable {
             read_flags |= libc::EV_ADD;
         } else {
@@ -58,7 +55,6 @@ impl Reactor {
         } else {
             write_flags |= libc::EV_DELETE;
         }
-
         let changelist = [
             libc::kevent {
                 ident: fd as _,
@@ -77,7 +73,6 @@ impl Reactor {
                 udata: key as _,
             },
         ];
-
         let mut eventlist = changelist;
         syscall!(kevent(
             self.kqueue_fd,
@@ -87,7 +82,6 @@ impl Reactor {
             eventlist.len() as _,
             ptr::null(),
         ))?;
-
         for ev in &eventlist {
             // Explanation for ignoring EPIPE: https://github.com/tokio-rs/mio/issues/582
             if (ev.flags & libc::EV_ERROR) != 0
@@ -98,7 +92,6 @@ impl Reactor {
                 return Err(io::Error::from_raw_os_error(ev.data as _));
             }
         }
-
         Ok(())
     }
 
@@ -140,7 +133,6 @@ impl Reactor {
                 return Err(io::Error::from_raw_os_error(ev.data as _));
             }
         }
-
         Ok(())
     }
 
@@ -150,7 +142,6 @@ impl Reactor {
             tv_sec: t.as_secs() as libc::time_t,
             tv_nsec: t.subsec_nanos() as libc::c_long,
         });
-
         // Wait for I/O events.
         let changelist = [];
         let eventlist = &mut events.list;
@@ -166,11 +157,9 @@ impl Reactor {
             }
         ))?;
         events.len = res as usize;
-
         // Clear the notification (if received) and re-register interest in it.
         while (&self.read_stream).read(&mut [0; 64]).is_ok() {}
         self.interest(self.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
-
         Ok(events.len)
     }
 

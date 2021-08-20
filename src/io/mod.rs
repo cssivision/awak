@@ -64,7 +64,6 @@ impl<T> Async<T> {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
-
             self.source.readable().await?;
         }
     }
@@ -79,20 +78,17 @@ impl<T> Async<T> {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
-
             self.source.readable().await?;
         }
     }
 
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-
         loop {
             match op(self.get_ref()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
-
             self.source.writable().await?;
         }
     }
@@ -102,13 +98,11 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
-
         loop {
             match op(self.get_mut()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
-
             self.source.writable().await?;
         }
     }

@@ -15,10 +15,8 @@ pub struct TcpListener {
 
 impl TcpListener {
     pub async fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
-        let listener = net::TcpListener::bind(addr)?;
-
         Ok(TcpListener {
-            inner: Async::new(listener)?,
+            inner: Async::new(net::TcpListener::bind(addr)?)?,
         })
     }
 
@@ -30,7 +28,6 @@ impl TcpListener {
 
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.read_with(|io| io.accept()).await?;
-
         Ok((TcpStream::from_std(stream)?, addr))
     }
 
@@ -53,7 +50,6 @@ impl<'a> Stream for Incoming<'a> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let fut = self.inner.accept();
         pin_mut!(fut);
-
         let (stream, _) = ready!(fut.poll(cx))?;
         Poll::Ready(Some(Ok(stream)))
     }

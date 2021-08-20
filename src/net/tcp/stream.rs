@@ -42,16 +42,13 @@ impl TcpStream {
 
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
         let addrs = addr.to_socket_addrs()?;
-
         let mut last_err = None;
-
         for addr in addrs {
             match TcpStream::connect_addr(addr).await {
                 Ok(stream) => return Ok(stream),
                 Err(e) => last_err = Some(e),
             }
         }
-
         Err(last_err.unwrap_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

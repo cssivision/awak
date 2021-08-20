@@ -12,7 +12,6 @@ impl UdpSocket {
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
         let addrs = addr.to_socket_addrs()?;
         let mut last_err = None;
-
         for addr in addrs {
             match UdpSocket::bind_addr(addr) {
                 Ok(socket) => return Ok(socket),
@@ -46,7 +45,6 @@ impl UdpSocket {
     pub fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
         let addrs = addr.to_socket_addrs()?;
         let mut last_err = None;
-
         for addr in addrs {
             match self.inner.get_ref().connect(addr) {
                 Ok(_) => return Ok(()),

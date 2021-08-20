@@ -45,11 +45,9 @@ pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
     for _ in 0..num_cpus::get().max(1) {
         thread::spawn(|| {
             let ticker = EXECUTOR.ticker();
-
             block_on(ticker.run());
         });
     }
-
     Executor::new()
 });
 

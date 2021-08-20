@@ -66,7 +66,6 @@ impl Poller {
         if let Ok(mut lock) = self.events.try_lock() {
             self.reactor.wait(&mut lock, timeout)?;
             self.notified.swap(false, Ordering::SeqCst);
-
             let len = events.len();
             events.extend(lock.iter().filter(|ev| ev.key != usize::MAX));
             Ok(events.len() - len)
@@ -83,7 +82,6 @@ impl Poller {
         {
             self.reactor.notify()?;
         }
-
         Ok(())
     }
 

@@ -35,24 +35,19 @@ impl Reactor {
         let epoll_fd = syscall!(epoll_create(1024))?;
         let flags = syscall!(fcntl(epoll_fd, libc::F_GETFD))?;
         syscall!(fcntl(epoll_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC))?;
-
         let event_fd = syscall!(eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK))?;
         let timer_fd = syscall!(timerfd_create(
             libc::CLOCK_MONOTONIC,
             libc::TFD_CLOEXEC | libc::TFD_NONBLOCK
         ))?;
-
         let reactor = Reactor {
             epoll_fd,
             event_fd,
             timer_fd,
         };
-
         reactor.insert(event_fd)?;
         reactor.insert(timer_fd)?;
-
         reactor.interest(event_fd, NOTIFY_KEY, true, false)?;
-
         Ok(reactor)
     }
 
@@ -64,26 +59,21 @@ impl Reactor {
         if write {
             flags |= write_flags();
         }
-
         let mut ev = libc::epoll_event {
             events: flags as _,
             u64: key as u64,
         };
-
         syscall!(epoll_ctl(self.epoll_fd, libc::EPOLL_CTL_MOD, fd, &mut ev))?;
-
         Ok(())
     }
 
     pub fn insert(&self, fd: RawFd) -> io::Result<()> {
         let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
         syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
-
         let mut ev = libc::epoll_event {
             events: libc::EPOLLONESHOT as _,
             u64: 0u64,
         };
-
         syscall!(epoll_ctl(self.epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut ev))?;
         Ok(())
     }
@@ -95,7 +85,6 @@ impl Reactor {
             fd,
             ptr::null_mut()
         ))?;
-
         Ok(())
     }
 
@@ -110,11 +99,8 @@ impl Reactor {
                 },
             },
         };
-
         syscall!(timerfd_settime(self.timer_fd, 0, &new_val, ptr::null_mut()))?;
-
         self.interest(self.timer_fd, NOTIFY_KEY, true, false)?;
-
         // Timeout in milliseconds for epoll.
         let timeout_ms = if timeout == Some(Duration::from_secs(0)) {
             // This is a non-blocking call - use zero as the timeout.
@@ -123,16 +109,13 @@ impl Reactor {
             // This is a blocking call - rely on timerfd to trigger the timeout.
             -1
         };
-
         let res = syscall!(epoll_wait(
             self.epoll_fd,
             events.list.as_mut_ptr() as *mut libc::epoll_event,
             events.list.len() as libc::c_int,
             timeout_ms as libc::c_int,
         ))?;
-
         events.len = res as usize;
-
         let mut buf = [0u8; 8];
         let _ = syscall!(read(
             self.event_fd,
@@ -140,7 +123,6 @@ impl Reactor {
             buf.len()
         ));
         self.interest(self.event_fd, NOTIFY_KEY, true, false)?;
-
         Ok(events.len)
     }
 
