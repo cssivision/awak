@@ -3,10 +3,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use super::{delay_until, Delay};
-
 use futures_util::future::poll_fn;
 use futures_util::stream::Stream;
+
+use super::{delay_until, Delay};
 
 pub fn interval(period: Duration) -> Interval {
     assert!(period > Duration::new(0, 0), "`period` must be non-zero.");

@@ -3,10 +3,10 @@ use std::net::{self, Shutdown, SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::io::Async;
-
 use futures_util::io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
 use socket2::{Domain, Protocol, Socket, Type};
+
+use crate::io::Async;
 
 #[derive(Debug)]
 pub struct TcpStream {

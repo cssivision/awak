@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use super::{delay_until, Delay};
-
 use pin_project_lite::pin_project;
+
+use super::{delay_until, Delay};
 
 pub fn timeout<T>(duration: Duration, future: T) -> Timeout<T>
 where

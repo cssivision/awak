@@ -9,10 +9,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
-pub(crate) use reactor::{Reactor, Source};
-
 pub use futures_util::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures_util::io::{IoSlice, IoSliceMut};
+
+pub(crate) use reactor::{Reactor, Source};
 
 #[derive(Debug)]
 pub struct Async<T> {
