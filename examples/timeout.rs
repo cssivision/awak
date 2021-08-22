@@ -22,7 +22,6 @@ fn main() -> io::Result<()> {
                 println!("timeout err: {:?}", e);
             }
         }
-
         Ok(())
     })
 }
