@@ -15,7 +15,7 @@ async-task = "4.0"
 rand = "0.8"
 libc = "0.2"
 slab = "0.4"
-socket2 = "0.4"
+socket2 = { version = "0.4", features = ["all"] }
 cfg-if = "0.1"
 pin-project-lite = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
