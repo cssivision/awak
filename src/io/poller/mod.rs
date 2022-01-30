@@ -1,3 +1,4 @@
+#![allow(clippy::non_send_fields_in_send_ty)]
 use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
