@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
-pub use futures_io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
+use futures_io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
 
 pub(crate) use reactor::{Reactor, Source};
 
