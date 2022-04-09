@@ -1,9 +1,9 @@
 use std::io;
 use std::time::Duration;
 
-use awak::io::AsyncWriteExt;
 use awak::net::UnixListener;
 use awak::time::delay_for;
+use futures_util::AsyncWriteExt;
 
 fn main() -> io::Result<()> {
     awak::block_on(async {

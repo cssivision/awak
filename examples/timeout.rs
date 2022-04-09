@@ -1,9 +1,9 @@
 use std::io;
 use std::time::Duration;
 
-use awak::io::AsyncReadExt;
 use awak::net::TcpStream;
 use awak::time::timeout;
+use futures_util::AsyncReadExt;
 
 fn main() -> io::Result<()> {
     awak::block_on(async {
