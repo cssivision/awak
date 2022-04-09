@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, Waker};
 
 use async_task::{Runnable, Task};
-use futures_util::future::poll_fn;
 use rand::Rng;
 
+use crate::future::poll_fn;
 use crate::queue::Queue;
 
 /// A multi-threaded executor.

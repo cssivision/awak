@@ -24,6 +24,7 @@ macro_rules! ready {
 
 pub mod blocking;
 pub mod executor;
+mod future;
 pub mod io;
 pub mod net;
 mod parking;
@@ -38,7 +39,6 @@ pub use async_task::Task;
 pub use blocking::block_on;
 pub use executor::Executor;
 
-pub use futures_util::stream::StreamExt;
 use once_cell::sync::Lazy;
 
 pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {

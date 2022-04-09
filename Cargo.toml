@@ -1,6 +1,6 @@
 [package]
 name = "awak"
-version = "0.2.15"
+version = "0.2.16"
 authors = ["cssivision <cssivision@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cssivision/awak"
@@ -18,4 +18,8 @@ slab = "0.4"
 socket2 = { version = "0.4", features = ["all"] }
 cfg-if = "0.1"
 pin-project-lite = "0.2"
+futures-io = "0.3"
+futures-core = "0.3"
+
+[dev-dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["io"] }

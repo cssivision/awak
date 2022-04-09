@@ -10,11 +10,11 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures_util::future::poll_fn;
 use once_cell::sync::Lazy;
 use slab::Slab;
 
 use super::poller::{Event, Poller};
+use crate::future::poll_fn;
 use crate::parking;
 use crate::queue::Queue;
 

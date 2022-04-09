@@ -4,7 +4,7 @@ use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures_util::stream::Stream;
+use futures_core::stream::Stream;
 
 use super::stream::TcpStream;
 use crate::io::Async;
