@@ -35,10 +35,10 @@ mod waker_fn;
 use std::future::Future;
 use std::thread;
 
-pub use async_task::Task;
 pub use blocking::block_on;
 pub use executor::Executor;
 
+use async_task::Task;
 use once_cell::sync::Lazy;
 
 pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
