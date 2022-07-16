@@ -1,3 +1,4 @@
+#![allow(clippy::forget_non_drop)]
 use std::mem::{self, ManuallyDrop};
 use std::sync::Arc;
 use std::task::{RawWaker, RawWakerVTable, Waker};
