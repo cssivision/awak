@@ -331,6 +331,7 @@ impl Source {
         let mut states = self.states.lock().unwrap();
         if let Some((a, b)) = states[op].ticks {
             if states[op].tick != a && states[op].tick != b {
+                states[op].ticks = None;
                 return Poll::Ready(Ok(()));
             }
         }
