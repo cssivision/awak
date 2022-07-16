@@ -67,6 +67,21 @@ impl<T> Async<T> {
         }
     }
 
+    pub fn poll_read_with<R>(
+        &self,
+        cx: &Context,
+        op: impl FnMut(&T) -> io::Result<R>,
+    ) -> Poll<io::Result<R>> {
+        let mut op = op;
+        loop {
+            match op(self.get_ref()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+            ready!(self.source.poll_readable(cx))?;
+        }
+    }
+
     pub async fn read_with_mut<R>(
         &mut self,
         op: impl FnMut(&mut T) -> io::Result<R>,
@@ -81,6 +96,21 @@ impl<T> Async<T> {
         }
     }
 
+    pub fn poll_read_with_mut<R>(
+        &mut self,
+        cx: &Context,
+        op: impl FnMut(&mut T) -> io::Result<R>,
+    ) -> Poll<io::Result<R>> {
+        let mut op = op;
+        loop {
+            match op(self.get_mut()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+            ready!(self.source.poll_readable(cx))?;
+        }
+    }
+
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         loop {
@@ -89,6 +119,21 @@ impl<T> Async<T> {
                 res => return res,
             }
             self.source.writable().await?;
+        }
+    }
+
+    pub fn poll_write_with<R>(
+        &self,
+        cx: &Context,
+        op: impl FnMut(&T) -> io::Result<R>,
+    ) -> Poll<io::Result<R>> {
+        let mut op = op;
+        loop {
+            match op(self.get_ref()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+            ready!(self.source.poll_writable(cx))?;
         }
     }
 
@@ -103,6 +148,21 @@ impl<T> Async<T> {
                 res => return res,
             }
             self.source.writable().await?;
+        }
+    }
+
+    pub fn poll_write_with_mut<R>(
+        &mut self,
+        cx: &Context,
+        op: impl FnMut(&mut T) -> io::Result<R>,
+    ) -> Poll<io::Result<R>> {
+        let mut op = op;
+        loop {
+            match op(self.get_mut()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+            ready!(self.source.poll_writable(cx))?;
         }
     }
 }

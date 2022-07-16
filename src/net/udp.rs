@@ -1,5 +1,6 @@
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
+use std::task::{Context, Poll};
 
 use crate::io::Async;
 
@@ -59,10 +60,6 @@ impl UdpSocket {
         }))
     }
 
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write_with(|io| io.send(buf)).await
-    }
-
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read_with(|io| io.recv(buf)).await
     }
@@ -71,8 +68,38 @@ impl UdpSocket {
         self.inner.read_with(|io| io.recv_from(buf)).await
     }
 
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write_with(|io| io.send(buf)).await
+    }
+
     pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], target: A) -> io::Result<usize> {
         let addr = target.into();
         self.inner.write_with(|io| io.send_to(buf, addr)).await
+    }
+
+    pub fn poll_recv(&self, cx: &Context, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        self.inner.poll_read_with(cx, |io| io.recv(buf))
+    }
+
+    pub fn poll_recv_from(
+        &self,
+        cx: &Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<(usize, SocketAddr)>> {
+        self.inner.poll_read_with(cx, |io| io.recv_from(buf))
+    }
+
+    pub fn poll_send(&self, cx: &Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        self.inner.poll_write_with(cx, |io| io.send(buf))
+    }
+
+    pub fn poll_send_to<A: Into<SocketAddr>>(
+        &self,
+        cx: &Context,
+        buf: &[u8],
+        target: A,
+    ) -> Poll<io::Result<usize>> {
+        let addr = target.into();
+        self.inner.poll_write_with(cx, |io| io.send_to(buf, addr))
     }
 }
