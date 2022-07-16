@@ -346,7 +346,7 @@ impl Source {
             ));
         }
         if was_empty {
-            // no readers, register in reactor
+            // no wakers, register in reactor
             Reactor::get().interest(
                 self.raw,
                 self.key,
