@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex, MutexGuard,
 };
-use std::task::{Poll, Waker};
+use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,8 @@ use crate::parking;
 use crate::queue::Queue;
 
 const DEFAULT_TIME_OP_SIZE: usize = 1000;
+const READ: usize = 0;
+const WRITE: usize = 1;
 
 pub(crate) struct Reactor {
     pub block_on_count: AtomicUsize,
@@ -83,25 +85,25 @@ impl ReactorLock<'_> {
 
                 for ev in self.events.iter() {
                     if let Some(source) = sources.get(ev.key) {
-                        let mut w = source.wakers.lock().unwrap();
+                        let mut states = source.states.lock().unwrap();
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
-                            w.tick_readable = tick + 1;
-                            wakers.append(&mut w.readers);
+                            states[READ].tick = tick + 1;
+                            wakers.append(&mut states[READ].wakers);
                         }
 
                         // Wake writers if a writability event was emitted.
                         if ev.writable {
-                            w.tick_writable = tick + 1;
-                            wakers.append(&mut w.writers);
+                            states[WRITE].tick = tick + 1;
+                            wakers.append(&mut states[WRITE].wakers);
                         }
-                        if !(w.writers.is_empty() && w.readers.is_empty()) {
+                        if !(states[WRITE].wakers.is_empty() && states[READ].wakers.is_empty()) {
                             self.reactor.poller.interest(
                                 source.raw,
                                 source.key,
-                                !w.readers.is_empty(),
-                                !w.writers.is_empty(),
+                                !states[READ].wakers.is_empty(),
+                                !states[WRITE].wakers.is_empty(),
                             )?;
                         }
                     }
@@ -211,12 +213,7 @@ impl Reactor {
         let source = Arc::new(Source {
             raw,
             key,
-            wakers: Mutex::new(Wakers {
-                readers: Vec::new(),
-                writers: Vec::new(),
-                tick_readable: 0,
-                tick_writable: 0,
-            }),
+            states: Default::default(),
         });
         entry.insert(source.clone());
         Ok(source)
@@ -300,75 +297,63 @@ pub(crate) struct Source {
     /// The key of this source obtained during registration.
     key: usize,
     /// Tasks interested in events on this source.
-    wakers: Mutex<Wakers>,
+    states: Mutex<[State; 2]>,
 }
 
-#[derive(Debug)]
-struct Wakers {
-    /// Tasks waiting for the next readability event.
-    readers: Vec<Waker>,
-    /// Tasks waiting for the next writability event.
-    writers: Vec<Waker>,
-
-    tick_readable: usize,
-    tick_writable: usize,
+#[derive(Default, Debug)]
+struct State {
+    /// Tasks waiting for the next event.
+    wakers: Vec<Waker>,
+    /// Last reactor tick that delivered an event.
+    tick: usize,
+    /// Ticks remembered by `poll_readable()` or `poll_writable()`.
+    ticks: Option<(usize, usize)>,
 }
 
 impl Source {
     pub async fn readable(&self) -> io::Result<()> {
-        let mut ticks = None;
-
-        poll_fn(|cx| {
-            let mut w = self.wakers.lock().unwrap();
-            if let Some((a, b)) = ticks {
-                if w.tick_readable != a && w.tick_readable != b {
-                    return Poll::Ready(Ok(()));
-                }
-            }
-            let was_empty = w.readers.is_empty();
-            if w.readers.iter().all(|w| !w.will_wake(cx.waker())) {
-                w.readers.push(cx.waker().clone());
-            }
-            if ticks.is_none() {
-                ticks = Some((
-                    Reactor::get().ticker.load(Ordering::SeqCst),
-                    w.tick_readable,
-                ));
-            }
-            if was_empty {
-                // no readers, register in reactor
-                Reactor::get().interest(self.raw, self.key, true, !w.writers.is_empty())?;
-            }
-            Poll::Pending
-        })
-        .await
+        poll_fn(|cx| self.poll_ready(READ, cx)).await
     }
 
     pub async fn writable(&self) -> io::Result<()> {
-        let mut ticks = None;
-        poll_fn(|cx| {
-            let mut w = self.wakers.lock().unwrap();
-            if let Some((a, b)) = ticks {
-                if w.tick_writable != a && w.tick_writable != b {
-                    return Poll::Ready(Ok(()));
-                }
+        poll_fn(|cx| self.poll_ready(WRITE, cx)).await
+    }
+
+    pub fn poll_readable(&self, cx: &Context) -> Poll<io::Result<()>> {
+        self.poll_ready(READ, cx)
+    }
+
+    pub fn poll_writable(&self, cx: &Context) -> Poll<io::Result<()>> {
+        self.poll_ready(WRITE, cx)
+    }
+
+    pub fn poll_ready(&self, op: usize, cx: &Context) -> Poll<io::Result<()>> {
+        let mut states = self.states.lock().unwrap();
+        if let Some((a, b)) = states[op].ticks {
+            if states[op].tick != a && states[op].tick != b {
+                states[op].ticks = None;
+                return Poll::Ready(Ok(()));
             }
-            let was_empty = w.writers.is_empty();
-            if w.writers.iter().all(|w| !w.will_wake(cx.waker())) {
-                w.writers.push(cx.waker().clone());
-            }
-            if ticks.is_none() {
-                ticks = Some((
-                    Reactor::get().ticker.load(Ordering::SeqCst),
-                    w.tick_writable,
-                ));
-            }
-            if was_empty {
-                // no writer, register in reactor
-                Reactor::get().interest(self.raw, self.key, !w.readers.is_empty(), true)?;
-            }
-            Poll::Pending
-        })
-        .await
+        }
+        let was_empty = states[op].wakers.is_empty();
+        if states[op].wakers.iter().all(|w| !w.will_wake(cx.waker())) {
+            states[op].wakers.push(cx.waker().clone());
+        }
+        if states[op].ticks.is_none() {
+            states[op].ticks = Some((
+                Reactor::get().ticker.load(Ordering::SeqCst),
+                states[op].tick,
+            ));
+        }
+        if was_empty {
+            // no wakers, register in reactor
+            Reactor::get().interest(
+                self.raw,
+                self.key,
+                !states[READ].wakers.is_empty(),
+                !states[WRITE].wakers.is_empty(),
+            )?;
+        }
+        Poll::Pending
     }
 }
