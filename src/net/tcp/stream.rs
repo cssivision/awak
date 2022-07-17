@@ -1,5 +1,6 @@
 use std::io;
 use std::net::{self, Shutdown, SocketAddr, ToSocketAddrs};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -237,5 +238,11 @@ impl AsRef<TcpStream> for ReadHalf<'_> {
 impl AsRef<TcpStream> for WriteHalf<'_> {
     fn as_ref(&self) -> &TcpStream {
         self.0
+    }
+}
+
+impl AsRawFd for TcpStream {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.get_ref().as_raw_fd()
     }
 }

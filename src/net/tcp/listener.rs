@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -52,5 +53,11 @@ impl<'a> Stream for Incoming<'a> {
         pin_mut!(fut);
         let (stream, _) = ready!(fut.poll(cx))?;
         Poll::Ready(Some(Ok(stream)))
+    }
+}
+
+impl AsRawFd for TcpListener {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.get_ref().as_raw_fd()
     }
 }
