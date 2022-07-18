@@ -1,5 +1,6 @@
 use std::io;
 use std::net::Shutdown;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{self, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
@@ -147,5 +148,11 @@ impl AsyncWrite for &UnixStream {
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(self.shutdown(Shutdown::Write))
+    }
+}
+
+impl AsRawFd for UnixStream {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.get_ref().as_raw_fd()
     }
 }

@@ -1,5 +1,6 @@
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::task::{Context, Poll};
 
 use crate::io::Async;
@@ -101,5 +102,11 @@ impl UdpSocket {
     ) -> Poll<io::Result<usize>> {
         let addr = target.into();
         self.inner.poll_write_with(cx, |io| io.send_to(buf, addr))
+    }
+}
+
+impl AsRawFd for UdpSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.get_ref().as_raw_fd()
     }
 }

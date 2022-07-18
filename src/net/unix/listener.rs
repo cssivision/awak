@@ -1,4 +1,5 @@
 use std::io;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{self, SocketAddr};
 use std::path::Path;
 
@@ -33,5 +34,11 @@ impl UnixListener {
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.get_ref().local_addr()
+    }
+}
+
+impl AsRawFd for UnixListener {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.get_ref().as_raw_fd()
     }
 }
