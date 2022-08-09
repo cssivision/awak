@@ -4,4 +4,4 @@ pub mod unix;
 
 pub use tcp::{TcpListener, TcpStream};
 pub use udp::UdpSocket;
-pub use unix::{UnixListener, UnixStream};
+pub use unix::{UnixDatagram, UnixListener, UnixStream};

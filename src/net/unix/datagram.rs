@@ -18,6 +18,14 @@ impl UnixDatagram {
         })
     }
 
+    pub fn pair() -> io::Result<(UnixDatagram, UnixDatagram)> {
+        let (sock1, sock2) = net::UnixDatagram::pair()?;
+        Ok((
+            UnixDatagram::from_std(sock1)?,
+            UnixDatagram::from_std(sock2)?,
+        ))
+    }
+
     pub fn from_std(socket: net::UnixDatagram) -> io::Result<UnixDatagram> {
         Ok(UnixDatagram {
             inner: Async::new(socket)?,
