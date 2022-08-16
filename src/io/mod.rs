@@ -200,7 +200,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_with(|io| (&*io).read(buf)))
+        poll_future(cx, self.read_with(|mut io| io.read(buf)))
     }
 
     fn poll_read_vectored(
@@ -208,7 +208,7 @@ where
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_with(|io| (&*io).read_vectored(bufs)))
+        poll_future(cx, self.read_with(|mut io| io.read_vectored(bufs)))
     }
 }
 
@@ -247,7 +247,7 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_with(|io| (&*io).write(buf)))
+        poll_future(cx, self.write_with(|mut io| io.write(buf)))
     }
 
     fn poll_write_vectored(
@@ -255,11 +255,11 @@ where
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_with(|io| (&*io).write_vectored(bufs)))
+        poll_future(cx, self.write_with(|mut io| io.write_vectored(bufs)))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        poll_future(cx, self.write_with(|io| (&*io).flush()))
+        poll_future(cx, self.write_with(|mut io| io.flush()))
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
