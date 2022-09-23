@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::future::poll_fn;
 use std::io;
 use std::mem;
 use std::os::unix::io::RawFd;
@@ -14,7 +15,6 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 
 use super::poller::{Event, Poller};
-use crate::future::poll_fn;
 use crate::parking;
 use crate::queue::Queue;
 

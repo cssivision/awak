@@ -12,19 +12,8 @@ macro_rules! pin_mut {
     )* }
 }
 
-#[macro_export]
-macro_rules! ready {
-    ($e:expr $(,)?) => {
-        match $e {
-            std::task::Poll::Ready(t) => t,
-            std::task::Poll::Pending => return core::task::Poll::Pending,
-        }
-    };
-}
-
 pub mod blocking;
 pub mod executor;
-mod future;
 pub mod io;
 pub mod net;
 mod parking;

@@ -1,12 +1,11 @@
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 use std::time::{Duration, Instant};
 
 use futures_core::stream::Stream;
 
 use super::{delay_until, Delay};
-use crate::future::poll_fn;
 
 pub fn interval(period: Duration) -> Interval {
     assert!(period > Duration::new(0, 0), "`period` must be non-zero.");

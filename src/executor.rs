@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -7,7 +7,6 @@ use std::task::{Context, Poll, Waker};
 use async_task::{Runnable, Task};
 use rand::Rng;
 
-use crate::future::poll_fn;
 use crate::queue::Queue;
 
 /// A multi-threaded executor.

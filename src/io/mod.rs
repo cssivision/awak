@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{ready, Context, Poll, Waker};
 use std::time::Instant;
 
 use futures_io::{AsyncRead, AsyncWrite, IoSlice, IoSliceMut};
