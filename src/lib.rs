@@ -19,6 +19,7 @@ pub mod net;
 mod parking;
 mod queue;
 pub mod time;
+pub mod util;
 mod waker_fn;
 
 use std::future::Future;
