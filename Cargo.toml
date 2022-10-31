@@ -1,6 +1,6 @@
 [package]
 name = "awak"
-version = "0.2.20"
+version = "0.2.21"
 authors = ["cssivision <cssivision@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cssivision/awak"
