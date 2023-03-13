@@ -1,5 +1,6 @@
 use std::fmt;
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -61,9 +62,9 @@ impl fmt::Display for Elapsed {
     }
 }
 
-impl From<Elapsed> for std::io::Error {
-    fn from(_err: Elapsed) -> std::io::Error {
-        std::io::ErrorKind::TimedOut.into()
+impl From<Elapsed> for io::Error {
+    fn from(_err: Elapsed) -> io::Error {
+        io::ErrorKind::TimedOut.into()
     }
 }
 

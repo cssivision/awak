@@ -4,7 +4,7 @@ pub mod reactor;
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll, Waker};
 use std::time::Instant;
@@ -268,8 +268,7 @@ where
 }
 
 fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    pin_mut!(fut);
-    fut.poll(cx)
+    pin!(fut).poll(cx)
 }
 
 pub(crate) struct Timer {

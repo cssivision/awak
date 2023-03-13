@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::future::Future;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -41,7 +42,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     });
 
     let cx = &mut Context::from_waker(&waker);
-    pin_mut!(future);
+    let mut future = pin!(future);
     loop {
         if let Poll::Ready(t) = future.as_mut().poll(cx) {
             return t;

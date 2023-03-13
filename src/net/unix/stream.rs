@@ -58,7 +58,7 @@ impl UnixStream {
         self.inner.get_ref().peer_addr()
     }
 
-    pub fn shutdown(&self, how: Shutdown) -> std::io::Result<()> {
+    pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
         self.inner.get_ref().shutdown(how)
     }
 }

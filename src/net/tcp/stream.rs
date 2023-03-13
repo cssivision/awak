@@ -66,7 +66,7 @@ impl TcpStream {
         self.inner.get_ref().peer_addr()
     }
 
-    pub fn shutdown(&self, how: net::Shutdown) -> std::io::Result<()> {
+    pub fn shutdown(&self, how: net::Shutdown) -> io::Result<()> {
         self.inner.get_ref().shutdown(how)
     }
 

@@ -2,7 +2,7 @@ use std::future::Future;
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::task::{ready, Context, Poll};
 
 use futures_core::stream::Stream;
@@ -50,7 +50,7 @@ impl<'a> Stream for Incoming<'a> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let fut = self.inner.accept();
-        pin_mut!(fut);
+        let fut = pin!(fut);
         let (stream, _) = ready!(fut.poll(cx))?;
         Poll::Ready(Some(Ok(stream)))
     }
