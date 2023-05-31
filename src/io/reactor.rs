@@ -15,7 +15,6 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 
 use super::poller::{Event, Poller};
-use crate::parking;
 use crate::queue::Queue;
 
 const DEFAULT_TIME_OP_SIZE: usize = 1000;
@@ -23,8 +22,6 @@ const READ: usize = 0;
 const WRITE: usize = 1;
 
 pub(crate) struct Reactor {
-    pub block_on_count: AtomicUsize,
-    pub unparker: parking::Unparker,
     ticker: AtomicUsize,
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
@@ -39,51 +36,51 @@ enum TimerOp {
     Remove(Instant, usize),
 }
 
-impl Drop for Reactor {
-    fn drop(&mut self) {
-        self.unparker.unpark();
+impl Reactor {
+    pub fn get() -> &'static Reactor {
+        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
+            thread::spawn(move || {
+                let reactor = Reactor::get();
+                loop {
+                    // spinning in this loop and just block on the reactor lock.
+                    let _ = reactor.react();
+                }
+            });
+            Reactor {
+                ticker: AtomicUsize::new(0),
+                poller: Poller::new(),
+                sources: Mutex::new(Slab::new()),
+                events: Mutex::new(Vec::new()),
+                timer_ops: Queue::with_capacity(DEFAULT_TIME_OP_SIZE),
+                timers: Mutex::new(BTreeMap::new()),
+            }
+        });
+        &REACTOR
     }
-}
 
-/// A lock on the reactor.
-pub(crate) struct ReactorLock<'a> {
-    reactor: &'a Reactor,
-    events: MutexGuard<'a, Vec<Event>>,
-}
-
-impl ReactorLock<'_> {
-    pub(crate) fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+    fn react(&self) -> io::Result<()> {
         let mut wakers = Vec::new();
-        let next_timer = self.reactor.process_timers(&mut wakers);
-
         // compute the timeout for blocking on I/O events.
-        let timeout = match (next_timer, timeout) {
-            (None, None) => None,
-            (Some(t), None) | (None, Some(t)) => Some(t),
-            (Some(a), Some(b)) => Some(a.min(b)),
-        };
+        let timeout = self.process_timers(&mut wakers);
 
         // Bump the ticker before polling I/O.
-        let tick = self
-            .reactor
-            .ticker
-            .fetch_add(1, Ordering::SeqCst)
-            .wrapping_add(1);
+        let tick = self.ticker.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
 
-        self.events.clear();
+        let mut events = self.events.lock().unwrap();
+        events.clear();
 
-        let res = match self.reactor.poller.wait(&mut self.events, timeout) {
+        let res = match self.poller.wait(&mut events, timeout) {
             Ok(0) => {
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
-                    self.reactor.process_timers(&mut wakers);
+                    self.process_timers(&mut wakers);
                 }
                 Ok(())
             }
             Ok(_) => {
-                let sources = self.reactor.sources.lock().unwrap();
+                let sources = self.sources.lock().unwrap();
 
-                for ev in self.events.iter() {
+                for ev in events.iter() {
                     if let Some(source) = sources.get(ev.key) {
                         let mut states = source.states.lock().unwrap();
 
@@ -99,7 +96,7 @@ impl ReactorLock<'_> {
                             wakers.append(&mut states[WRITE].wakers);
                         }
                         if !(states[WRITE].wakers.is_empty() && states[READ].wakers.is_empty()) {
-                            self.reactor.poller.interest(
+                            self.poller.interest(
                                 source.raw,
                                 source.key,
                                 !states[READ].wakers.is_empty(),
@@ -120,85 +117,7 @@ impl ReactorLock<'_> {
         for waker in wakers {
             waker.wake();
         }
-
         res
-    }
-}
-
-impl Reactor {
-    pub fn get() -> &'static Reactor {
-        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
-            let (parker, unparker) = parking::pair();
-            thread::spawn(move || {
-                let reactor = Reactor::get();
-
-                // The last observed reactor tick.
-                let mut last_tick = 0;
-                // Number of sleeps since this thread has called `react()`.
-                let mut sleeps = 0u64;
-
-                loop {
-                    let tick = reactor.ticker.load(Ordering::SeqCst);
-                    if last_tick == tick {
-                        let reactor_lock = if sleeps >= 10 {
-                            // If no new ticks have occurred for a while, stop sleeping and
-                            // spinning in this loop and just block on the reactor lock.
-                            Some(Reactor::get().lock())
-                        } else {
-                            Reactor::get().try_lock()
-                        };
-                        if let Some(mut reactor_lock) = reactor_lock {
-                            let _ = reactor_lock.react(None);
-                            last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
-                            sleeps = 0;
-                        }
-                    } else {
-                        last_tick = tick;
-                    }
-
-                    if Reactor::get().block_on_count.load(Ordering::SeqCst) > 0 {
-                        // Exponential backoff from 50us to 10ms.
-                        let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
-                            .get(sleeps as usize)
-                            .unwrap_or(&10_000);
-                        if !parker.park_timeout(Some(Duration::from_nanos(*delay_us))) {
-                            sleeps += 1;
-                        } else {
-                            sleeps = 0;
-                            last_tick = Reactor::get().ticker.load(Ordering::SeqCst);
-                        }
-                    }
-                }
-            });
-            Reactor {
-                unparker,
-                block_on_count: AtomicUsize::new(0),
-                ticker: AtomicUsize::new(0),
-                poller: Poller::new(),
-                sources: Mutex::new(Slab::new()),
-                events: Mutex::new(Vec::new()),
-                timer_ops: Queue::with_capacity(DEFAULT_TIME_OP_SIZE),
-                timers: Mutex::new(BTreeMap::new()),
-            }
-        });
-        &REACTOR
-    }
-
-    fn lock(&self) -> ReactorLock<'_> {
-        let reactor = self;
-        let events = self.events.lock().unwrap();
-        ReactorLock { reactor, events }
-    }
-
-    /// Attempts to lock the reactor.
-    pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
-        self.events
-            .try_lock()
-            .map(|events| {
-                let reactor = self;
-                ReactorLock { reactor, events }
-            })
-            .ok()
     }
 
     fn interest(&self, raw: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
