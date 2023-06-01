@@ -2,7 +2,6 @@
 use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use cfg_if::cfg_if;
@@ -51,7 +50,6 @@ pub struct Event {
 pub struct Poller {
     notified: AtomicBool,
     reactor: sys::Reactor,
-    events: Mutex<sys::Events>,
 }
 
 impl Poller {
@@ -59,20 +57,16 @@ impl Poller {
         Poller {
             notified: AtomicBool::new(false),
             reactor: sys::Reactor::new().expect("init reactor fail"),
-            events: Mutex::new(sys::Events::new()),
         }
     }
 
     pub fn wait(&self, events: &mut Vec<Event>, timeout: Option<Duration>) -> io::Result<usize> {
-        if let Ok(mut lock) = self.events.try_lock() {
-            self.reactor.wait(&mut lock, timeout)?;
-            self.notified.swap(false, Ordering::SeqCst);
-            let len = events.len();
-            events.extend(lock.iter().filter(|ev| ev.key != usize::MAX));
-            Ok(events.len() - len)
-        } else {
-            Ok(0)
-        }
+        let mut sys_events = sys::Events::new();
+        self.reactor.wait(&mut sys_events, timeout)?;
+        self.notified.swap(false, Ordering::SeqCst);
+        let len = events.len();
+        events.extend(sys_events.iter().filter(|ev| ev.key != usize::MAX));
+        Ok(events.len() - len)
     }
 
     pub fn notify(&self) -> io::Result<()> {

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use slab::Slab;
 
-use super::poller::{Event, Poller};
+use super::poller::Poller;
 use crate::queue::Queue;
 
 const DEFAULT_TIME_OP_SIZE: usize = 1000;
@@ -25,7 +25,6 @@ pub(crate) struct Reactor {
     ticker: AtomicUsize,
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
-    events: Mutex<Vec<Event>>,
     timer_ops: Queue<TimerOp>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 }
@@ -50,7 +49,6 @@ impl Reactor {
                 ticker: AtomicUsize::new(0),
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
-                events: Mutex::new(Vec::new()),
                 timer_ops: Queue::with_capacity(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
@@ -66,9 +64,7 @@ impl Reactor {
         // Bump the ticker before polling I/O.
         let tick = self.ticker.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
 
-        let mut events = self.events.lock().unwrap();
-        events.clear();
-
+        let mut events = Vec::new();
         let res = match self.poller.wait(&mut events, timeout) {
             Ok(0) => {
                 if timeout != Some(Duration::from_secs(0)) {
@@ -80,7 +76,7 @@ impl Reactor {
             Ok(_) => {
                 let sources = self.sources.lock().unwrap();
 
-                for ev in events.iter() {
+                for ev in events.into_iter() {
                     if let Some(source) = sources.get(ev.key) {
                         let mut states = source.states.lock().unwrap();
 
