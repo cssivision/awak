@@ -65,7 +65,7 @@ impl Reactor {
         let tick = self.ticker.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
 
         let res = match self.poller.wait(timeout) {
-            Ok(events) if events.len() == 0 => {
+            Ok(events) if events.is_empty() => {
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
                     self.process_timers(&mut wakers);
