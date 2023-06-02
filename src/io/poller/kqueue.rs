@@ -136,7 +136,8 @@ impl Reactor {
         Ok(())
     }
 
-    pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<Events> {
+        let mut events = Events::new();
         // Convert the `Duration` to `libc::timespec`.
         let timeout = timeout.map(|t| libc::timespec {
             tv_sec: t.as_secs() as libc::time_t,
@@ -160,7 +161,7 @@ impl Reactor {
         // Clear the notification (if received) and re-register interest in it.
         while (&self.read_stream).read(&mut [0; 64]).is_ok() {}
         self.interest(self.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
-        Ok(events.len)
+        Ok(events)
     }
 
     pub fn notify(&self) -> io::Result<()> {
