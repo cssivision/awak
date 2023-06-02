@@ -88,7 +88,8 @@ impl Reactor {
         Ok(())
     }
 
-    pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<Events> {
+        let mut events = Events::new();
         let new_val = libc::itimerspec {
             it_interval: TS_ZERO,
             it_value: match timeout {
@@ -123,7 +124,7 @@ impl Reactor {
             buf.len()
         ));
         self.interest(self.event_fd, NOTIFY_KEY, true, false)?;
-        Ok(events.len)
+        Ok(events)
     }
 
     pub fn notify(&self) -> io::Result<()> {

@@ -60,13 +60,14 @@ impl Poller {
         }
     }
 
-    pub fn wait(&self, events: &mut Vec<Event>, timeout: Option<Duration>) -> io::Result<usize> {
-        let mut sys_events = sys::Events::new();
-        self.reactor.wait(&mut sys_events, timeout)?;
+    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<Vec<Event>> {
+        let sys_events = self.reactor.wait(timeout)?;
         self.notified.swap(false, Ordering::SeqCst);
-        let len = events.len();
-        events.extend(sys_events.iter().filter(|ev| ev.key != usize::MAX));
-        Ok(events.len() - len)
+        let events = sys_events
+            .iter()
+            .filter(|ev| ev.key != usize::MAX)
+            .collect();
+        Ok(events)
     }
 
     pub fn notify(&self) -> io::Result<()> {

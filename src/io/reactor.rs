@@ -64,16 +64,15 @@ impl Reactor {
         // Bump the ticker before polling I/O.
         let tick = self.ticker.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
 
-        let mut events = Vec::new();
-        let res = match self.poller.wait(&mut events, timeout) {
-            Ok(0) => {
+        let res = match self.poller.wait(timeout) {
+            Ok(events) if events.len() == 0 => {
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
                     self.process_timers(&mut wakers);
                 }
                 Ok(())
             }
-            Ok(_) => {
+            Ok(events) => {
                 let sources = self.sources.lock().unwrap();
 
                 for ev in events.into_iter() {
