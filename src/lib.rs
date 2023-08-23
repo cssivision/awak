@@ -18,7 +18,7 @@ use async_task::Task;
 use once_cell::sync::Lazy;
 
 pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
-    for _ in 0..num_cpus::get().max(1) {
+    for _ in 0..thread::available_parallelism().unwrap().get().max(1) {
         thread::spawn(|| {
             let ticker = EXECUTOR.ticker();
             block_on(ticker.run());

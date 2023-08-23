@@ -49,7 +49,7 @@ impl Reactor {
                 ticker: AtomicUsize::new(0),
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
-                timer_ops: Queue::with_capacity(DEFAULT_TIME_OP_SIZE),
+                timer_ops: Queue::new(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
         });
@@ -143,9 +143,11 @@ impl Reactor {
         // Generate a new timer ID.
         static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
-        self.timer_ops
-            .push(TimerOp::Insert(when, id, waker.clone()));
-        if self.timer_ops.len() >= DEFAULT_TIME_OP_SIZE {
+        while self
+            .timer_ops
+            .push(TimerOp::Insert(when, id, waker.clone()))
+            .is_err()
+        {
             let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
         }
@@ -154,8 +156,7 @@ impl Reactor {
     }
 
     pub fn remove_timer(&self, when: Instant, id: usize) {
-        self.timer_ops.push(TimerOp::Remove(when, id));
-        if self.timer_ops.len() >= DEFAULT_TIME_OP_SIZE {
+        while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
             let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
         }
@@ -187,13 +188,13 @@ impl Reactor {
     fn process_timer_ops(&self, timers: &mut MutexGuard<'_, BTreeMap<(Instant, usize), Waker>>) {
         for _ in 0..self.timer_ops.capacity() {
             match self.timer_ops.pop() {
-                Some(TimerOp::Insert(when, id, waker)) => {
+                Ok(TimerOp::Insert(when, id, waker)) => {
                     timers.insert((when, id), waker);
                 }
-                Some(TimerOp::Remove(when, id)) => {
+                Ok(TimerOp::Remove(when, id)) => {
                     timers.remove(&(when, id));
                 }
-                None => break,
+                Err(_) => break,
             }
         }
     }

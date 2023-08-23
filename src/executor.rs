@@ -1,5 +1,6 @@
+use std::cell::RefCell;
 use std::future::{poll_fn, Future};
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, Waker};
@@ -12,7 +13,7 @@ use crate::queue::Queue;
 /// A multi-threaded executor.
 #[derive(Debug)]
 pub struct Executor {
-    global: Arc<Global>,
+    state: Arc<State>,
 }
 
 impl Default for Executor {
@@ -24,10 +25,10 @@ impl Default for Executor {
 impl Executor {
     pub fn new() -> Executor {
         Executor {
-            global: Arc::new(Global {
-                queue: Queue::new(),
+            state: Arc::new(State {
+                queue: Queue::new(512),
                 notified: AtomicBool::new(false),
-                shards: RwLock::new(Vec::new()),
+                local_queues: RwLock::new(Vec::new()),
                 sleepers: Mutex::new(Sleepers {
                     count: 0,
                     wakers: Vec::new(),
@@ -41,10 +42,26 @@ impl Executor {
         &self,
         future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
-        let global = self.global.clone();
+        let state = self.state.clone();
+
         let schedule = move |runnable| {
-            global.queue.push(runnable);
-            global.notify();
+            let mut runnable = Some(runnable);
+            // Try to push into the local queue.
+            LocalQueue::with(|local_queue| {
+                if local_queue.state != &*state as *const State as usize {
+                    return;
+                }
+                if let Err(e) = local_queue.queue.push(runnable.take().unwrap()) {
+                    runnable = Some(e.into_inner());
+                    return;
+                }
+                local_queue.waker.wake_by_ref();
+            });
+
+            if let Some(runnable) = runnable {
+                state.queue.push(runnable).unwrap();
+                state.notify();
+            }
         };
 
         let (runnable, task) = async_task::spawn(future, schedule);
@@ -54,22 +71,22 @@ impl Executor {
 
     pub fn ticker(&self) -> Ticker {
         let ticker = Ticker {
-            global: self.global.clone(),
-            shard: Arc::new(Queue::with_capacity(512)),
+            state: self.state.clone(),
+            local: Arc::new(Queue::new(64)),
             sleeping: AtomicUsize::new(0),
             ticks: AtomicUsize::new(0),
         };
-        self.global
-            .shards
+        self.state
+            .local_queues
             .write()
             .unwrap()
-            .push(ticker.shard.clone());
+            .push(ticker.local.clone());
         ticker
     }
 }
 
 #[derive(Debug)]
-struct Global {
+struct State {
     /// The global queue.
     queue: Queue<Runnable>,
 
@@ -77,7 +94,7 @@ struct Global {
     notified: AtomicBool,
 
     /// Shards of the global queue created by tickers.
-    shards: RwLock<Vec<Arc<Queue<Runnable>>>>,
+    local_queues: RwLock<Vec<Arc<Queue<Runnable>>>>,
 
     /// A list of sleeping tickers.
     sleepers: Mutex<Sleepers>,
@@ -153,7 +170,7 @@ impl Sleepers {
     }
 }
 
-impl Global {
+impl State {
     fn notify(&self) {
         if self
             .notified
@@ -168,14 +185,79 @@ impl Global {
     }
 }
 
+std::thread_local! {
+    /// The current local queue.
+    static LOCAL_QUEUE: RefCell<Option<LocalQueue>> = RefCell::new(None);
+}
+
+impl LocalQueue {
+    async fn set<F>(state: usize, queue: &Arc<Queue<Runnable>>, fut: F) -> F::Output
+    where
+        F: Future,
+    {
+        // Store the local queue and the current waker.
+        poll_fn(|cx| {
+            let waker = cx.waker().clone();
+            LOCAL_QUEUE.with(move |slot| {
+                slot.borrow_mut().replace(LocalQueue {
+                    state,
+                    queue: queue.clone(),
+                    waker,
+                });
+            });
+            Poll::Ready(())
+        })
+        .await;
+
+        let mut fut = pin!(fut);
+        poll_fn(|cx| {
+            let waker = cx.waker();
+            LOCAL_QUEUE
+                .try_with(move |slot| {
+                    let mut slot = slot.borrow_mut();
+                    let local_queue = slot.as_mut().expect("missing local queue");
+
+                    // If we've been replaced, just ignore the slot.
+                    if !Arc::ptr_eq(&local_queue.queue, queue) {
+                        return;
+                    }
+
+                    // Update the waker, if it has changed.
+                    if !local_queue.waker.will_wake(waker) {
+                        local_queue.waker = waker.clone();
+                    }
+                })
+                .ok();
+
+            // run future.
+            fut.as_mut().poll(cx)
+        })
+        .await
+    }
+
+    /// Run a function with the current local queue.
+    fn with<R>(f: impl FnOnce(&LocalQueue) -> R) -> Option<R> {
+        LOCAL_QUEUE
+            .try_with(|local_queue| local_queue.borrow().as_ref().map(f))
+            .ok()
+            .flatten()
+    }
+}
+
+struct LocalQueue {
+    state: usize,
+    queue: Arc<Queue<Runnable>>,
+    waker: Waker,
+}
+
 /// Runs tasks in a multi-threaded executor.
 #[derive(Debug)]
 pub struct Ticker {
-    /// The global queue.
-    global: Arc<Global>,
+    /// The global state.
+    state: Arc<State>,
 
-    /// A shard of the global queue.
-    shard: Arc<Queue<Runnable>>,
+    /// local queue.
+    local: Arc<Queue<Runnable>>,
 
     /// Set to `sleeper's id` when in sleeping state.
     ///
@@ -194,7 +276,7 @@ impl Ticker {
     ///
     /// Returns `false` if the ticker was already sleeping and unnotified.
     fn sleep(&self, waker: &Waker) -> bool {
-        let mut sleepers = self.global.sleepers.lock().unwrap();
+        let mut sleepers = self.state.sleepers.lock().unwrap();
         match self.sleeping.load(Ordering::SeqCst) {
             // Move to sleeping state.
             0 => self
@@ -207,7 +289,7 @@ impl Ticker {
                 }
             }
         }
-        self.global
+        self.state
             .notified
             .swap(sleepers.is_notified(), Ordering::SeqCst);
         true
@@ -218,21 +300,28 @@ impl Ticker {
         if id == 0 {
             return;
         }
-        let mut sleepers = self.global.sleepers.lock().unwrap();
+        let mut sleepers = self.state.sleepers.lock().unwrap();
         sleepers.remove(id);
-        self.global
+        self.state
             .notified
             .swap(sleepers.is_notified(), Ordering::SeqCst);
     }
 
+    fn state(&self) -> usize {
+        &*self.state as *const State as usize
+    }
+
     pub async fn run(&self) {
-        loop {
-            for _ in 0..200 {
-                let runnable = self.tick().await;
-                runnable.run();
+        LocalQueue::set(self.state(), &self.local, async move {
+            loop {
+                for _ in 0..200 {
+                    let runnable = self.tick().await;
+                    runnable.run();
+                }
+                yield_now().await;
             }
-            yield_now().await;
-        }
+        })
+        .await;
     }
 
     /// Return a single task and returns `None` if one was found.
@@ -248,12 +337,12 @@ impl Ticker {
                     self.wake();
                     // Notify another ticker now to pick up where this ticker left off, just in
                     // case running the task takes a long time.
-                    self.global.notify();
+                    self.state.notify();
                     // Bump the ticker.
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks % 64 == 0 {
-                        steal(&self.global.queue, &self.shard);
+                        steal(&self.state.queue, &self.local);
                     }
                     Poll::Ready(r)
                 }
@@ -264,17 +353,17 @@ impl Ticker {
 
     /// Finds the next task to run.
     fn search(&self) -> Option<Runnable> {
-        if let Some(r) = self.shard.pop() {
+        if let Ok(r) = self.local.pop() {
             return Some(r);
         }
 
         // Try stealing from the global queue.
-        if let Some(r) = self.global.queue.pop() {
+        if let Ok(r) = self.state.queue.pop() {
             return Some(r);
         }
 
         // Try stealing from other shards.
-        let shards = self.global.shards.read().unwrap();
+        let shards = self.state.local_queues.read().unwrap();
 
         // Pick a random starting point in the iterator list and rotate the list.
         let n = shards.len();
@@ -284,12 +373,12 @@ impl Ticker {
             .chain(shards.iter())
             .skip(start)
             .take(n)
-            .filter(|shard| !Arc::ptr_eq(shard, &self.shard));
+            .filter(|shard| !Arc::ptr_eq(shard, &self.local));
 
         // Try stealing from each shard in the list.
         for shard in iter {
-            steal(shard, &self.shard);
-            if let Some(r) = self.shard.pop() {
+            steal(shard, &self.local);
+            if let Ok(r) = self.local.pop() {
                 return Some(r);
             }
         }
@@ -305,8 +394,8 @@ fn steal<T>(src: &Queue<T>, dest: &Queue<T>) {
         // Don't steal more than fits into the queue.
         count = count.min(dest.capacity() - dest.len());
         for _ in 0..count {
-            if let Some(t) = src.pop() {
-                dest.push(t);
+            if let Ok(t) = src.pop() {
+                let _ = dest.push(t);
             } else {
                 break;
             }

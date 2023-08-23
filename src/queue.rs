@@ -1,35 +1,86 @@
 use std::collections::VecDeque;
+use std::error::Error;
+use std::fmt;
 use std::sync::RwLock;
 
 #[derive(Debug)]
 pub struct Queue<T> {
-    inner: RwLock<VecDeque<T>>,
+    inner: RwLock<Inner<T>>,
+    capacity: usize,
 }
 
-impl<T> Queue<T> {
-    pub fn new() -> Queue<T> {
-        Queue::with_capacity(0)
-    }
+#[derive(Debug)]
+struct Inner<T> {
+    queue: VecDeque<T>,
+    length: usize,
+}
 
-    pub fn with_capacity(n: usize) -> Queue<T> {
+#[derive(Debug)]
+pub struct ErrorFull<T> {
+    inner: T,
+}
+
+impl<T> fmt::Display for ErrorFull<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "queue full")
+    }
+}
+
+impl<T: std::fmt::Debug> Error for ErrorFull<T> {}
+
+impl<T> ErrorFull<T> {
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
+#[derive(Debug)]
+pub struct ErrorEmpty;
+
+impl fmt::Display for ErrorEmpty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "queue empty")
+    }
+}
+
+impl Error for ErrorEmpty {}
+
+impl<T> Queue<T> {
+    pub fn new(n: usize) -> Queue<T> {
         Queue {
-            inner: RwLock::new(VecDeque::with_capacity(n)),
+            inner: RwLock::new(Inner {
+                queue: VecDeque::with_capacity(n),
+                length: 0,
+            }),
+            capacity: n,
         }
     }
 
-    pub fn pop(&self) -> Option<T> {
-        self.inner.write().unwrap().pop_front()
+    pub fn pop(&self) -> Result<T, ErrorEmpty> {
+        let mut inner = self.inner.write().unwrap();
+        if inner.length == 0 {
+            return Err(ErrorEmpty);
+        }
+        inner.length -= 1;
+        inner.queue.pop_front().ok_or(ErrorEmpty)
     }
 
-    pub fn push(&self, value: T) {
-        self.inner.write().unwrap().push_back(value)
+    pub fn push(&self, value: T) -> Result<(), ErrorFull<T>> {
+        let mut inner = self.inner.write().unwrap();
+        if self.capacity == inner.length {
+            return Err(ErrorFull { inner: value });
+        }
+        inner.length += 1;
+        inner.queue.push_back(value);
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
-        self.inner.read().unwrap().len()
+        let inner = self.inner.write().unwrap();
+        inner.length
     }
 
     pub fn capacity(&self) -> usize {
-        self.inner.read().unwrap().capacity()
+        self.capacity
     }
 }
