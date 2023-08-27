@@ -76,9 +76,9 @@ impl Reactor {
         let mut eventlist = changelist;
         syscall!(kevent(
             self.kqueue_fd,
-            changelist.as_ptr() as *const libc::kevent,
+            changelist.as_ptr(),
             changelist.len() as _,
-            eventlist.as_mut_ptr() as *mut libc::kevent,
+            eventlist.as_mut_ptr(),
             eventlist.len() as _,
             ptr::null(),
         ))?;
@@ -120,9 +120,9 @@ impl Reactor {
         let mut eventlist = changelist;
         syscall!(kevent(
             self.kqueue_fd,
-            changelist.as_ptr() as *const libc::kevent,
+            changelist.as_ptr(),
             changelist.len() as _,
-            eventlist.as_mut_ptr() as *mut libc::kevent,
+            eventlist.as_mut_ptr(),
             eventlist.len() as _,
             ptr::null(),
         ))?;
@@ -148,9 +148,9 @@ impl Reactor {
         let eventlist = &mut events.list;
         let res = syscall!(kevent(
             self.kqueue_fd,
-            changelist.as_ptr() as *const libc::kevent,
+            changelist.as_ptr(),
             changelist.len() as _,
-            eventlist.as_mut_ptr() as *mut libc::kevent,
+            eventlist.as_mut_ptr(),
             eventlist.len() as _,
             match &timeout {
                 None => ptr::null(),

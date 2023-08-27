@@ -112,7 +112,7 @@ impl Reactor {
         };
         let res = syscall!(epoll_wait(
             self.epoll_fd,
-            events.list.as_mut_ptr() as *mut libc::epoll_event,
+            events.list.as_mut_ptr(),
             events.list.len() as libc::c_int,
             timeout_ms as libc::c_int,
         ))?;
