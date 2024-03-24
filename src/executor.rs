@@ -187,7 +187,7 @@ impl State {
 
 std::thread_local! {
     /// The current local queue.
-    static LOCAL_QUEUE: RefCell<Option<LocalQueue>> = RefCell::new(None);
+    static LOCAL_QUEUE: RefCell<Option<LocalQueue>> = const { RefCell::new(None) };
 }
 
 impl LocalQueue {
