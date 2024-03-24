@@ -358,8 +358,11 @@ impl Ticker {
         }
 
         // Try stealing from the global queue.
-        if let Ok(r) = self.state.queue.pop() {
-            return Some(r);
+        if self.state.queue.len() > 0 {
+            steal(&self.state.queue, &self.local);
+            if let Ok(r) = self.local.pop() {
+                return Some(r);
+            }
         }
 
         // Try stealing from other shards.
