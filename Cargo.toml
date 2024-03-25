@@ -19,6 +19,7 @@ cfg-if = "1"
 pin-project-lite = "0.2"
 futures-io = "0.3"
 futures-core = "0.3"
+thread_local = "1.1"
 
 [dev-dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
