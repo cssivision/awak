@@ -1,17 +1,16 @@
-use std::cell::RefCell;
 use std::future::{poll_fn, Future};
-use std::pin::{pin, Pin};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use async_task::{Runnable, Task};
 use rand::Rng;
+use thread_local::ThreadLocal;
 
 use crate::queue::Queue;
 
 /// A multi-threaded executor.
-#[derive(Debug)]
 pub struct Executor {
     state: Arc<State>,
 }
@@ -28,7 +27,7 @@ impl Executor {
             state: Arc::new(State {
                 queue: Queue::new(512),
                 notified: AtomicBool::new(false),
-                local_queues: RwLock::new(Vec::new()),
+                local_queue: ThreadLocal::new(),
                 sleepers: Mutex::new(Sleepers {
                     count: 0,
                     wakers: Vec::new(),
@@ -47,16 +46,13 @@ impl Executor {
         let schedule = move |runnable| {
             let mut runnable = Some(runnable);
             // Try to push into the local queue.
-            LocalQueue::with(|local_queue| {
-                if local_queue.state != &*state as *const State as usize {
-                    return;
-                }
+            if let Some(local_queue) = state.local_queue.get() {
                 if let Err(e) = local_queue.queue.push(runnable.take().unwrap()) {
                     runnable = Some(e.into_inner());
-                    return;
+                } else {
+                    local_queue.waker.wake_by_ref();
                 }
-                local_queue.waker.wake_by_ref();
-            });
+            }
 
             if let Some(runnable) = runnable {
                 state.queue.push(runnable).unwrap();
@@ -70,22 +66,14 @@ impl Executor {
     }
 
     pub fn ticker(&self) -> Ticker {
-        let ticker = Ticker {
+        Ticker {
             state: self.state.clone(),
-            local: Arc::new(Queue::new(64)),
             sleeping: AtomicUsize::new(0),
             ticks: AtomicUsize::new(0),
-        };
-        self.state
-            .local_queues
-            .write()
-            .unwrap()
-            .push(ticker.local.clone());
-        ticker
+        }
     }
 }
 
-#[derive(Debug)]
 struct State {
     /// The global queue.
     queue: Queue<Runnable>,
@@ -94,7 +82,7 @@ struct State {
     notified: AtomicBool,
 
     /// Shards of the global queue created by tickers.
-    local_queues: RwLock<Vec<Arc<Queue<Runnable>>>>,
+    local_queue: ThreadLocal<LocalQueue>,
 
     /// A list of sleeping tickers.
     sleepers: Mutex<Sleepers>,
@@ -185,79 +173,15 @@ impl State {
     }
 }
 
-std::thread_local! {
-    /// The current local queue.
-    static LOCAL_QUEUE: RefCell<Option<LocalQueue>> = const { RefCell::new(None) };
-}
-
-impl LocalQueue {
-    async fn set<F>(state: usize, queue: &Arc<Queue<Runnable>>, fut: F) -> F::Output
-    where
-        F: Future,
-    {
-        // Store the local queue and the current waker.
-        poll_fn(|cx| {
-            let waker = cx.waker().clone();
-            LOCAL_QUEUE.with(move |slot| {
-                slot.borrow_mut().replace(LocalQueue {
-                    state,
-                    queue: queue.clone(),
-                    waker,
-                });
-            });
-            Poll::Ready(())
-        })
-        .await;
-
-        let mut fut = pin!(fut);
-        poll_fn(|cx| {
-            let waker = cx.waker();
-            LOCAL_QUEUE
-                .try_with(move |slot| {
-                    let mut slot = slot.borrow_mut();
-                    let local_queue = slot.as_mut().expect("missing local queue");
-
-                    // If we've been replaced, just ignore the slot.
-                    if !Arc::ptr_eq(&local_queue.queue, queue) {
-                        return;
-                    }
-
-                    // Update the waker, if it has changed.
-                    if !local_queue.waker.will_wake(waker) {
-                        local_queue.waker = waker.clone();
-                    }
-                })
-                .ok();
-
-            // run future.
-            fut.as_mut().poll(cx)
-        })
-        .await
-    }
-
-    /// Run a function with the current local queue.
-    fn with<R>(f: impl FnOnce(&LocalQueue) -> R) -> Option<R> {
-        LOCAL_QUEUE
-            .try_with(|local_queue| local_queue.borrow().as_ref().map(f))
-            .ok()
-            .flatten()
-    }
-}
-
 struct LocalQueue {
-    state: usize,
-    queue: Arc<Queue<Runnable>>,
+    queue: Queue<Runnable>,
     waker: Waker,
 }
 
 /// Runs tasks in a multi-threaded executor.
-#[derive(Debug)]
 pub struct Ticker {
     /// The global state.
     state: Arc<State>,
-
-    /// local queue.
-    local: Arc<Queue<Runnable>>,
 
     /// Set to `sleeper's id` when in sleeping state.
     ///
@@ -307,30 +231,30 @@ impl Ticker {
             .swap(sleepers.is_notified(), Ordering::SeqCst);
     }
 
-    fn state(&self) -> usize {
-        &*self.state as *const State as usize
-    }
-
     pub async fn run(&self) {
-        LocalQueue::set(self.state(), &self.local, async move {
-            loop {
-                for _ in 0..200 {
-                    let runnable = self.tick().await;
-                    runnable.run();
-                }
-                yield_now().await;
-            }
+        let local_queue = poll_fn(|cx| {
+            Poll::Ready(self.state.local_queue.get_or(|| LocalQueue {
+                queue: Queue::new(512),
+                waker: cx.waker().clone(),
+            }))
         })
         .await;
+
+        loop {
+            for _ in 0..200 {
+                let runnable = self.tick(local_queue).await;
+                runnable.run();
+            }
+            yield_now().await;
+        }
     }
 
     /// Return a single task and returns `None` if one was found.
-    async fn tick(&self) -> Runnable {
+    async fn tick(&self, local_queue: &LocalQueue) -> Runnable {
         poll_fn(|cx| {
-            match self.search() {
+            match self.search(local_queue) {
                 None => {
                     self.sleep(cx.waker());
-
                     Poll::Pending
                 }
                 Some(r) => {
@@ -342,7 +266,7 @@ impl Ticker {
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks % 64 == 0 {
-                        steal(&self.state.queue, &self.local);
+                        steal(&self.state.queue, &local_queue.queue);
                     }
                     Poll::Ready(r)
                 }
@@ -352,33 +276,34 @@ impl Ticker {
     }
 
     /// Finds the next task to run.
-    fn search(&self) -> Option<Runnable> {
-        if let Ok(r) = self.local.pop() {
+    fn search(&self, local_queue: &LocalQueue) -> Option<Runnable> {
+        if let Ok(r) = local_queue.queue.pop() {
             return Some(r);
         }
 
         // Try stealing from the global queue.
         if let Ok(r) = self.state.queue.pop() {
+            steal(&self.state.queue, &local_queue.queue);
             return Some(r);
         }
 
         // Try stealing from other shards.
-        let shards = self.state.local_queues.read().unwrap();
+        let local_queues = &self.state.local_queue;
 
         // Pick a random starting point in the iterator list and rotate the list.
-        let n = shards.len();
+        let n = local_queues.iter().count();
         let start = rand::thread_rng().gen_range(0..n);
-        let iter = shards
+        let iter = local_queues
             .iter()
-            .chain(shards.iter())
+            .chain(local_queues.iter())
             .skip(start)
             .take(n)
-            .filter(|shard| !Arc::ptr_eq(shard, &self.local));
+            .filter(|shard| !std::ptr::eq(*shard, local_queue));
 
         // Try stealing from each shard in the list.
         for shard in iter {
-            steal(shard, &self.local);
-            if let Ok(r) = self.local.pop() {
+            steal(&shard.queue, &local_queue.queue);
+            if let Ok(r) = local_queue.queue.pop() {
                 return Some(r);
             }
         }
