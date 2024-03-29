@@ -33,6 +33,8 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
         // Try grabbing a lock on the reactor to process I/O events.
         if let Some(reactor_lock) = Reactor::get().try_lock() {
+            // Hold the lock means all I/O events just handled.
+
             // Record the instant at which the lock was grabbed.
             let start = Instant::now();
 
