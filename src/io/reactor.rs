@@ -5,13 +5,12 @@ use std::mem;
 use std::os::unix::io::RawFd;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex, MutexGuard,
+    Arc, Mutex, MutexGuard, OnceLock,
 };
 use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use once_cell::sync::Lazy;
 use slab::Slab;
 
 use super::poller::Poller;
@@ -37,7 +36,8 @@ enum TimerOp {
 
 impl Reactor {
     pub fn get() -> &'static Reactor {
-        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
+        static REACTOR: OnceLock<Reactor> = OnceLock::new();
+        REACTOR.get_or_init(|| {
             thread::spawn(move || {
                 let reactor = Reactor::get();
                 loop {
@@ -52,8 +52,7 @@ impl Reactor {
                 timer_ops: Queue::new(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
-        });
-        &REACTOR
+        })
     }
 
     fn react(&self) -> io::Result<()> {

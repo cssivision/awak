@@ -9,24 +9,29 @@ pub mod util;
 mod waker_fn;
 
 use std::future::Future;
+use std::panic::catch_unwind;
+use std::sync::OnceLock;
 use std::thread;
 
 pub use blocking::block_on;
 pub use executor::Executor;
 
 use async_task::Task;
-use once_cell::sync::Lazy;
-
-pub static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
-    for _ in 0..thread::available_parallelism().unwrap().get().max(1) {
-        thread::spawn(|| {
-            let ticker = EXECUTOR.ticker();
-            block_on(ticker.run());
-        });
-    }
-    Executor::new()
-});
 
 pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-    EXECUTOR.spawn(future)
+    fn global() -> &'static Executor {
+        static EXECUTOR: OnceLock<Executor> = OnceLock::new();
+
+        EXECUTOR.get_or_init(|| {
+            for _ in 0..thread::available_parallelism().unwrap().get().max(1) {
+                thread::spawn(|| loop {
+                    let _ = catch_unwind(|| {
+                        block_on(global().ticker().run());
+                    });
+                });
+            }
+            Executor::new()
+        })
+    }
+    global().spawn(future)
 }
