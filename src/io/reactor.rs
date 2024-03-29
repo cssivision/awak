@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use slab::Slab;
 
 use super::poller::Poller;
+use crate::parking;
 use crate::queue::Queue;
 
 const DEFAULT_TIME_OP_SIZE: usize = 1000;
@@ -21,6 +22,8 @@ const READ: usize = 0;
 const WRITE: usize = 1;
 
 pub(crate) struct Reactor {
+    pub block_on_count: AtomicUsize,
+    pub unparker: parking::Unparker,
     ticker: AtomicUsize,
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
@@ -35,17 +38,70 @@ enum TimerOp {
     Remove(Instant, usize),
 }
 
+impl Drop for Reactor {
+    fn drop(&mut self) {
+        self.unparker.unpark();
+    }
+}
+
 impl Reactor {
+    /// Returns the current ticker.
+    fn ticker(&self) -> usize {
+        self.ticker.load(Ordering::SeqCst)
+    }
+
     pub fn get() -> &'static Reactor {
         static REACTOR: OnceLock<Reactor> = OnceLock::new();
         REACTOR.get_or_init(|| {
+            let (parker, unparker) = parking::pair();
+
             thread::spawn(move || {
+                // The last observed reactor tick.
+                let mut last_tick = 0;
+                // Number of sleeps since this thread has called `react()`.
+                let mut sleeps = 0u64;
+
                 loop {
-                    // spinning in this loop and just block on the reactor lock.
-                    let _ = Reactor::get().lock().react(None);
+                    let tick = Reactor::get().ticker();
+
+                    if last_tick == tick {
+                        let reactor_lock = if sleeps >= 10 {
+                            // If no new ticks have occurred for a while, stop sleeping and spinning in
+                            // this loop and just block on the reactor lock.
+                            Some(Reactor::get().lock())
+                        } else {
+                            Reactor::get().try_lock()
+                        };
+
+                        if let Some(reactor_lock) = reactor_lock {
+                            reactor_lock.react(None).ok();
+                            last_tick = Reactor::get().ticker();
+                            sleeps = 0;
+                        }
+                    } else {
+                        last_tick = tick;
+                    }
+
+                    if Reactor::get().block_on_count.load(Ordering::SeqCst) > 0 {
+                        // Exponential backoff from 50us to 10ms.
+                        let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
+                            .get(sleeps as usize)
+                            .unwrap_or(&10_000);
+
+                        if parker.park_timeout(Some(Duration::from_micros(*delay_us))) {
+                            // If notified before timeout, reset the last tick and the sleep counter.
+                            last_tick = Reactor::get().ticker();
+                            sleeps = 0;
+                        } else {
+                            sleeps += 1;
+                        }
+                    }
                 }
             });
+
             Reactor {
+                unparker,
+                block_on_count: AtomicUsize::new(0),
                 ticker: AtomicUsize::new(0),
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
