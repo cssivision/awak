@@ -32,7 +32,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     let (p, u) = parking::pair();
     let io_blocked = Arc::new(AtomicBool::new(false));
     thread_local! {
-        static IO_POLLING: Cell<bool> = Cell::new(false);
+        static IO_POLLING: Cell<bool> = const { Cell::new(false) };
     }
     let waker = waker_fn({
         let io_blocked = io_blocked.clone();
