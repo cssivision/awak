@@ -24,6 +24,7 @@ pub(crate) struct Reactor {
     ticker: AtomicUsize,
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
+    lock: Mutex<()>,
     timer_ops: Queue<TimerOp>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 }
@@ -39,26 +40,48 @@ impl Reactor {
         static REACTOR: OnceLock<Reactor> = OnceLock::new();
         REACTOR.get_or_init(|| {
             thread::spawn(move || {
-                let reactor = Reactor::get();
                 loop {
                     // spinning in this loop and just block on the reactor lock.
-                    let _ = reactor.react();
+                    let _ = Reactor::get().lock().react(None);
                 }
             });
             Reactor {
                 ticker: AtomicUsize::new(0),
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
+                lock: Mutex::new(()),
                 timer_ops: Queue::new(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
         })
     }
 
-    fn react(&self) -> io::Result<()> {
+    pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
+        self.lock.try_lock().ok().map(|_guard| ReactorLock {
+            reactor: self,
+            _guard,
+        })
+    }
+
+    pub fn lock(&self) -> ReactorLock<'_> {
+        let _guard = self.lock.lock().unwrap();
+        ReactorLock {
+            reactor: self,
+            _guard,
+        }
+    }
+
+    fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
         let mut wakers = Vec::new();
         // compute the timeout for blocking on I/O events.
-        let timeout = self.process_timers(&mut wakers);
+        let next_timer = self.process_timers(&mut wakers);
+
+        // compute the timeout for blocking on I/O events.
+        let timeout = match (next_timer, timeout) {
+            (None, None) => None,
+            (Some(t), None) | (None, Some(t)) => Some(t),
+            (Some(a), Some(b)) => Some(a.min(b)),
+        };
 
         // Bump the ticker before polling I/O.
         let tick = self.ticker.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
@@ -200,6 +223,18 @@ impl Reactor {
 
     pub fn notify(&self) {
         self.poller.notify().expect("failed to notify reactor");
+    }
+}
+
+/// A lock on the reactor.
+pub(crate) struct ReactorLock<'a> {
+    reactor: &'a Reactor,
+    _guard: MutexGuard<'a, ()>,
+}
+
+impl<'a> ReactorLock<'a> {
+    pub fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.reactor.react(timeout)
     }
 }
 
