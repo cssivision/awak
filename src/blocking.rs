@@ -1,6 +1,10 @@
+use std::cell::Cell;
 use std::future::Future;
 use std::pin::pin;
-use std::sync::atomic::Ordering;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -25,10 +29,18 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
         Reactor::get().block_on_count.fetch_sub(1, Ordering::SeqCst);
         Reactor::get().unparker.unpark();
     });
-
     let (p, u) = parking::pair();
-    let waker = waker_fn(move || {
-        u.unpark();
+    let io_blocked = Arc::new(AtomicBool::new(false));
+    thread_local! {
+        static IO_POLLING: Cell<bool> = Cell::new(false);
+    }
+    let waker = waker_fn({
+        let io_blocked = io_blocked.clone();
+        move || {
+            if u.unpark() && !IO_POLLING.with(Cell::get) && io_blocked.load(Ordering::SeqCst) {
+                Reactor::get().notify();
+            }
+        }
     });
 
     let cx = &mut Context::from_waker(&waker);
@@ -42,6 +54,10 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
         if p.park_timeout(Some(Duration::from_secs(0))) {
             // Try grabbing a lock on the reactor to process I/O events.
             if let Some(reactor_lock) = Reactor::get().try_lock() {
+                IO_POLLING.with(|io| io.set(true));
+                let _guard = CallOnDrop(|| {
+                    IO_POLLING.with(|io| io.set(false));
+                });
                 // Process available I/O events.
                 reactor_lock.react(Some(Duration::from_secs(0))).ok();
             }
@@ -56,6 +72,13 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
             let start = Instant::now();
 
             loop {
+                IO_POLLING.with(|io| io.set(true));
+                io_blocked.store(true, Ordering::SeqCst);
+                let _guard = CallOnDrop(|| {
+                    IO_POLLING.with(|io| io.set(false));
+                    io_blocked.store(false, Ordering::SeqCst);
+                });
+
                 // Check if a notification has been received.
                 if p.park_timeout(Some(Duration::from_secs(0))) {
                     break;
@@ -77,6 +100,8 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
                     // themselves.
                     drop(reactor_lock);
 
+                    // Unpark the epoll thread in case no other thread is ready to start
+                    // processing I/O events. This way we prevent a potential latency spike.
                     Reactor::get().unparker.unpark();
 
                     // Wait for a notification.
