@@ -22,8 +22,8 @@ const READ: usize = 0;
 const WRITE: usize = 1;
 
 pub(crate) struct Reactor {
-    pub block_on_count: AtomicUsize,
-    pub unparker: parking::Unparker,
+    block_on_count: AtomicUsize,
+    unparker: parking::Unparker,
     ticker: AtomicUsize,
     poller: Poller,
     sources: Mutex<Slab<Arc<Source>>>,
@@ -45,9 +45,20 @@ impl Drop for Reactor {
 }
 
 impl Reactor {
-    /// Returns the current ticker.
     fn ticker(&self) -> usize {
         self.ticker.load(Ordering::SeqCst)
+    }
+
+    pub fn unpark(&self) -> bool {
+        self.unparker.unpark()
+    }
+
+    pub fn add_block_on_count(&self) {
+        self.block_on_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn sub_block_on_count(&self) {
+        self.block_on_count.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub fn get() -> &'static Reactor {

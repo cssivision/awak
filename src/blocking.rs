@@ -23,17 +23,19 @@ impl<F: Fn()> Drop for CallOnDrop<F> {
 
 /// Runs a future to completion on the current thread.
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
-    Reactor::get().block_on_count.fetch_add(1, Ordering::SeqCst);
+    Reactor::get().add_block_on_count();
 
     let _guard = CallOnDrop(|| {
-        Reactor::get().block_on_count.fetch_sub(1, Ordering::SeqCst);
-        Reactor::get().unparker.unpark();
+        Reactor::get().sub_block_on_count();
+        Reactor::get().unpark();
     });
+
     let (p, u) = parking::pair();
     let io_blocked = Arc::new(AtomicBool::new(false));
     thread_local! {
         static IO_POLLING: Cell<bool> = const { Cell::new(false) };
     }
+
     let waker = waker_fn({
         let io_blocked = io_blocked.clone();
         move || {
@@ -102,7 +104,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
                     // Unpark the epoll thread in case no other thread is ready to start
                     // processing I/O events. This way we prevent a potential latency spike.
-                    Reactor::get().unparker.unpark();
+                    Reactor::get().unpark();
 
                     // Wait for a notification.
                     p.park();
