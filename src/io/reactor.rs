@@ -40,7 +40,7 @@ enum TimerOp {
 
 impl Drop for Reactor {
     fn drop(&mut self) {
-        self.unparker.unpark();
+        self.unpark();
     }
 }
 
