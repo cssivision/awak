@@ -16,23 +16,15 @@ struct Inner<T> {
 }
 
 #[derive(Debug)]
-pub struct ErrorFull<T> {
-    inner: T,
-}
+pub struct ErrorFull;
 
-impl<T> fmt::Display for ErrorFull<T> {
+impl fmt::Display for ErrorFull {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "queue full")
     }
 }
 
-impl<T: std::fmt::Debug> Error for ErrorFull<T> {}
-
-impl<T> ErrorFull<T> {
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
-}
+impl Error for ErrorFull {}
 
 #[derive(Debug)]
 pub struct ErrorEmpty;
@@ -46,13 +38,23 @@ impl fmt::Display for ErrorEmpty {
 impl Error for ErrorEmpty {}
 
 impl<T> Queue<T> {
-    pub fn new(n: usize) -> Queue<T> {
+    pub fn bound(n: usize) -> Queue<T> {
         Queue {
             inner: RwLock::new(Inner {
                 queue: VecDeque::with_capacity(n),
                 length: 0,
             }),
             capacity: n,
+        }
+    }
+
+    pub fn unbound() -> Queue<T> {
+        Queue {
+            inner: RwLock::new(Inner {
+                queue: VecDeque::new(),
+                length: 0,
+            }),
+            capacity: usize::MAX,
         }
     }
 
@@ -65,10 +67,10 @@ impl<T> Queue<T> {
         inner.queue.pop_front().ok_or(ErrorEmpty)
     }
 
-    pub fn push(&self, value: T) -> Result<(), ErrorFull<T>> {
+    pub fn push(&self, value: T) -> Result<(), ErrorFull> {
         let mut inner = self.inner.write().unwrap();
         if self.capacity == inner.length {
-            return Err(ErrorFull { inner: value });
+            return Err(ErrorFull);
         }
         inner.length += 1;
         inner.queue.push_back(value);

@@ -117,7 +117,7 @@ impl Reactor {
                 poller: Poller::new(),
                 sources: Mutex::new(Slab::new()),
                 lock: Mutex::new(()),
-                timer_ops: Queue::new(DEFAULT_TIME_OP_SIZE),
+                timer_ops: Queue::bound(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
             }
         })

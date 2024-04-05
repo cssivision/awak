@@ -1,4 +1,9 @@
+#![allow(clippy::len_without_is_empty)]
+use std::cell::UnsafeCell;
+use std::error::Error;
+use std::fmt;
 use std::future::{poll_fn, Future};
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,7 +30,7 @@ impl Executor {
     pub fn new() -> Executor {
         Executor {
             state: Arc::new(State {
-                queue: Queue::new(512),
+                queue: Queue::unbound(),
                 notified: AtomicBool::new(false),
                 local_queue: ThreadLocal::new(),
                 sleepers: Mutex::new(Sleepers {
@@ -174,7 +179,7 @@ impl State {
 }
 
 struct LocalQueue {
-    queue: Queue<Runnable>,
+    queue: Local<Runnable>,
     waker: Waker,
 }
 
@@ -234,7 +239,7 @@ impl Ticker {
     pub async fn run(&self) {
         let local_queue = poll_fn(|cx| {
             Poll::Ready(self.state.local_queue.get_or(|| LocalQueue {
-                queue: Queue::new(512),
+                queue: Local::new(512),
                 waker: cx.waker().clone(),
             }))
         })
@@ -266,7 +271,7 @@ impl Ticker {
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks % 64 == 0 {
-                        steal(&self.state.queue, &local_queue.queue);
+                        steal2(&self.state.queue, &local_queue.queue);
                     }
                     Poll::Ready(r)
                 }
@@ -283,7 +288,7 @@ impl Ticker {
 
         // Try stealing from the global queue.
         if let Ok(r) = self.state.queue.pop() {
-            steal(&self.state.queue, &local_queue.queue);
+            steal2(&self.state.queue, &local_queue.queue);
             return Some(r);
         }
 
@@ -312,7 +317,24 @@ impl Ticker {
 }
 
 /// Steals some items from one queue into another.
-fn steal<T>(src: &Queue<T>, dest: &Queue<T>) {
+fn steal2<T>(src: &Queue<T>, dest: &Local<T>) {
+    // Half of `src`'s length rounded up.
+    let mut count = (src.len() + 1) / 2;
+    if count > 0 {
+        // Don't steal more than fits into the queue.
+        count = count.min(dest.capacity() - dest.len());
+        for _ in 0..count {
+            if let Ok(t) = src.pop() {
+                let _ = dest.push(t);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// Steals some items from one queue into another.
+fn steal<T>(src: &Local<T>, dest: &Local<T>) {
     // Half of `src`'s length rounded up.
     let mut count = (src.len() + 1) / 2;
     if count > 0 {
@@ -349,3 +371,141 @@ impl Future for YieldNow {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct Local<T> {
+    /// Concurrently updated by many threads.
+    head: AtomicUsize,
+
+    /// Only updated by current thread but read by many threads.
+    tail: AtomicUsize,
+
+    /// Masks the head / tail position value to obtain the index in the buffer.
+    mask: usize,
+
+    /// Stores the values.
+    buffer: Box<[UnsafeCell<MaybeUninit<T>>]>,
+
+    /// capacity.
+    capacity: usize,
+}
+
+unsafe impl<T> Send for Local<T> {}
+unsafe impl<T> Sync for Local<T> {}
+
+impl<T> Local<T> {
+    fn new(n: usize) -> Local<T> {
+        let capacity = n.next_power_of_two();
+        let mask = capacity - 1;
+
+        let mut buffer = Vec::with_capacity(capacity);
+        for _ in 0..capacity {
+            buffer.push(UnsafeCell::new(MaybeUninit::uninit()));
+        }
+
+        Local {
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            mask,
+            buffer: buffer.into_boxed_slice(),
+            capacity,
+        }
+    }
+
+    fn pop(&self) -> Result<T, ErrorEmpty> {
+        loop {
+            let head = self.head.load(Ordering::Acquire);
+
+            // safety: this is the **only** thread that updates this cell.
+            let tail = self.tail.load(Ordering::Relaxed);
+
+            if head == tail {
+                // queue is empty
+                return Err(ErrorEmpty);
+            }
+
+            // Map the head position to a slot index.
+            let idx = head & self.mask;
+
+            let value = unsafe { self.buffer[idx].get().read() };
+
+            // Attempt to claim the slot.
+            if self
+                .head
+                .compare_exchange(
+                    head,
+                    head.wrapping_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return Ok(unsafe { value.assume_init() });
+            }
+        }
+    }
+
+    fn push(&self, value: T) -> Result<(), ErrorFull<T>> {
+        let head = self.head.load(Ordering::Acquire);
+
+        // safety: this is the **only** thread that updates this cell.
+        let tail = self.tail.load(Ordering::Relaxed);
+
+        if tail.wrapping_sub(head) < self.buffer.len() {
+            // Map the position to a slot index.
+            let idx = tail & self.mask;
+
+            // Don't drop the previous value in `buffer[idx]` because
+            // it is uninitialized memory.
+            unsafe {
+                self.buffer[idx].get().write(MaybeUninit::new(value));
+            }
+
+            // Make the index available
+            self.tail.store(tail.wrapping_add(1), Ordering::Release);
+            return Ok(());
+        }
+        // The buffer is full.
+        Err(ErrorFull { inner: value })
+    }
+
+    pub fn len(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Relaxed);
+        tail - head
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+
+#[derive(Debug)]
+struct ErrorFull<T> {
+    inner: T,
+}
+
+impl<T> fmt::Display for ErrorFull<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "queue full")
+    }
+}
+
+impl<T: std::fmt::Debug> Error for ErrorFull<T> {}
+
+impl<T> ErrorFull<T> {
+    fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
+#[derive(Debug)]
+struct ErrorEmpty;
+
+impl fmt::Display for ErrorEmpty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "queue empty")
+    }
+}
+
+impl Error for ErrorEmpty {}
