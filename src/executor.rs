@@ -52,7 +52,7 @@ impl Executor {
             let mut runnable = Some(runnable);
             // Try to push into the local queue.
             if let Some(local_queue) = state.local_queue.get() {
-                if let Err(e) = local_queue.queue.push(runnable.take().unwrap()) {
+                if let Err(e) = local_queue.local.push(runnable.take().unwrap()) {
                     runnable = Some(e.into_inner());
                 } else {
                     local_queue.waker.wake_by_ref();
@@ -179,7 +179,7 @@ impl State {
 }
 
 struct LocalQueue {
-    queue: Local<Runnable>,
+    local: Local<Runnable>,
     waker: Waker,
 }
 
@@ -239,7 +239,7 @@ impl Ticker {
     pub async fn run(&self) {
         let local_queue = poll_fn(|cx| {
             Poll::Ready(self.state.local_queue.get_or(|| LocalQueue {
-                queue: Local::new(512),
+                local: Local::new(512),
                 waker: cx.waker().clone(),
             }))
         })
@@ -271,7 +271,7 @@ impl Ticker {
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks % 64 == 0 {
-                        steal2(&self.state.queue, &local_queue.queue);
+                        steal2(&self.state.queue, &local_queue.local);
                     }
                     Poll::Ready(r)
                 }
@@ -282,13 +282,13 @@ impl Ticker {
 
     /// Finds the next task to run.
     fn search(&self, local_queue: &LocalQueue) -> Option<Runnable> {
-        if let Ok(r) = local_queue.queue.pop() {
+        if let Ok(r) = local_queue.local.pop() {
             return Some(r);
         }
 
         // Try stealing from the global queue.
         if let Ok(r) = self.state.queue.pop() {
-            steal2(&self.state.queue, &local_queue.queue);
+            steal2(&self.state.queue, &local_queue.local);
             return Some(r);
         }
 
@@ -307,8 +307,8 @@ impl Ticker {
 
         // Try stealing from each shard in the list.
         for shard in iter {
-            steal(&shard.queue, &local_queue.queue);
-            if let Ok(r) = local_queue.queue.pop() {
+            steal(&shard.local, &local_queue.local);
+            if let Ok(r) = local_queue.local.pop() {
                 return Some(r);
             }
         }
@@ -316,7 +316,7 @@ impl Ticker {
     }
 }
 
-/// Steals some items from one queue into another.
+/// Steals some items from global into local.
 fn steal2<T>(src: &Queue<T>, dest: &Local<T>) {
     // Half of `src`'s length rounded up.
     let mut count = (src.len() + 1) / 2;
@@ -333,7 +333,7 @@ fn steal2<T>(src: &Queue<T>, dest: &Local<T>) {
     }
 }
 
-/// Steals some items from one queue into another.
+/// Steals some items from local into another.
 fn steal<T>(src: &Local<T>, dest: &Local<T>) {
     // Half of `src`'s length rounded up.
     let mut count = (src.len() + 1) / 2;
