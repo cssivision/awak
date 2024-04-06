@@ -416,7 +416,6 @@ impl<T> Local<T> {
         loop {
             let head = self.head.load(Ordering::Acquire);
 
-            // safety: this is the **only** thread that updates this cell.
             let tail = self.tail.load(Ordering::Relaxed);
 
             if head == tail {
@@ -448,7 +447,7 @@ impl<T> Local<T> {
     fn push(&self, value: T) -> Result<(), ErrorFull<T>> {
         let head = self.head.load(Ordering::Acquire);
 
-        // safety: this is the **only** thread that updates this cell.
+        // safety: this is the only thread that updates this cell.
         let tail = self.tail.load(Ordering::Relaxed);
 
         if tail.wrapping_sub(head) < self.buffer.len() {
@@ -470,9 +469,27 @@ impl<T> Local<T> {
     }
 
     pub fn len(&self) -> usize {
-        let head = self.head.load(Ordering::Acquire);
-        let tail = self.tail.load(Ordering::Relaxed);
-        tail - head
+        loop {
+            // Load the tail, then load the head.
+            let tail = self.tail.load(Ordering::SeqCst);
+            let head = self.head.load(Ordering::SeqCst);
+
+            // If the tail didn't change, we've got consistent values to work with.
+            if self.tail.load(Ordering::SeqCst) == tail {
+                let hix = head & self.mask;
+                let tix = tail & self.mask;
+
+                return if hix < tix {
+                    tix - hix
+                } else if hix > tix {
+                    self.buffer.len() - hix + tix
+                } else if (tail & !self.mask) == head {
+                    0
+                } else {
+                    self.buffer.len()
+                };
+            }
+        }
     }
 
     pub fn capacity(&self) -> usize {
