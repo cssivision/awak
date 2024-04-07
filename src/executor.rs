@@ -271,7 +271,9 @@ impl Ticker {
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks % 64 == 0 {
-                        steal2(&self.state.queue, &local_queue.local);
+                        local_queue
+                            .local
+                            .steal(self.state.queue.len(), || self.state.queue.pop().ok());
                     }
                     Poll::Ready(r)
                 }
@@ -288,7 +290,9 @@ impl Ticker {
 
         // Try stealing from the global queue.
         if let Ok(r) = self.state.queue.pop() {
-            steal2(&self.state.queue, &local_queue.local);
+            local_queue
+                .local
+                .steal(self.state.queue.len(), || self.state.queue.pop().ok());
             return Some(r);
         }
 
@@ -307,46 +311,14 @@ impl Ticker {
 
         // Try stealing from each shard in the list.
         for shard in iter {
-            steal(&shard.local, &local_queue.local);
+            local_queue
+                .local
+                .steal(shard.local.len(), || shard.local.pop().ok());
             if let Ok(r) = local_queue.local.pop() {
                 return Some(r);
             }
         }
         None
-    }
-}
-
-/// Steals some items from global into local.
-fn steal2<T>(src: &Queue<T>, dest: &Local<T>) {
-    // Half of `src`'s length rounded up.
-    let mut count = (src.len() + 1) / 2;
-    if count > 0 {
-        // Don't steal more than fits into the queue.
-        count = count.min(dest.capacity() - dest.len());
-        for _ in 0..count {
-            if let Ok(t) = src.pop() {
-                let _ = dest.push(t);
-            } else {
-                break;
-            }
-        }
-    }
-}
-
-/// Steals some items from local into another.
-fn steal<T>(src: &Local<T>, dest: &Local<T>) {
-    // Half of `src`'s length rounded up.
-    let mut count = (src.len() + 1) / 2;
-    if count > 0 {
-        // Don't steal more than fits into the queue.
-        count = count.min(dest.capacity() - dest.len());
-        for _ in 0..count {
-            if let Ok(t) = src.pop() {
-                let _ = dest.push(t);
-            } else {
-                break;
-            }
-        }
     }
 }
 
@@ -388,6 +360,25 @@ pub struct Local<T> {
 
     /// capacity.
     capacity: usize,
+}
+
+impl<T> Local<T> {
+    /// Steals some items from local into another.
+    fn steal(&self, length: usize, f: impl Fn() -> Option<T>) {
+        // Half of `src`'s length rounded up.
+        let mut count = (length + 1) / 2;
+        if count > 0 {
+            // Don't steal more than fits into local.
+            count = count.min(self.capacity() - self.len());
+            for _ in 0..count {
+                if let Some(t) = f() {
+                    let _ = self.push(t);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 unsafe impl<T> Send for Local<T> {}
