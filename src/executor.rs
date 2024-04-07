@@ -413,11 +413,9 @@ impl<T> Local<T> {
     }
 
     fn pop(&self) -> Result<T, ErrorEmpty> {
+        let mut head = self.head.load(Ordering::Acquire);
         loop {
-            let head = self.head.load(Ordering::Acquire);
-
-            let tail = self.tail.load(Ordering::Relaxed);
-
+            let tail = self.tail.load(Ordering::Acquire);
             if head == tail {
                 // queue is empty
                 return Err(ErrorEmpty);
@@ -425,28 +423,27 @@ impl<T> Local<T> {
 
             // Map the head position to a slot index.
             let idx = head & self.mask;
-
             let value = unsafe { self.buffer[idx].get().read() };
 
             // Attempt to claim the slot.
-            if self
-                .head
-                .compare_exchange(
-                    head,
-                    head.wrapping_add(1),
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                return Ok(unsafe { value.assume_init() });
+            match self.head.compare_exchange(
+                head,
+                head.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(unsafe { value.assume_init() });
+                }
+                Err(current) => {
+                    head = current;
+                }
             }
         }
     }
 
     fn push(&self, value: T) -> Result<(), ErrorFull<T>> {
         let head = self.head.load(Ordering::Acquire);
-
         // safety: this is the only thread that updates this cell.
         let tail = self.tail.load(Ordering::Relaxed);
 
@@ -469,26 +466,14 @@ impl<T> Local<T> {
     }
 
     pub fn len(&self) -> usize {
-        loop {
-            // Load the tail, then load the head.
-            let tail = self.tail.load(Ordering::SeqCst);
-            let head = self.head.load(Ordering::SeqCst);
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
 
-            // If the tail didn't change, we've got consistent values to work with.
-            if self.tail.load(Ordering::SeqCst) == tail {
-                let hix = head & self.mask;
-                let tix = tail & self.mask;
-
-                return if hix < tix {
-                    tix - hix
-                } else if hix > tix {
-                    self.buffer.len() - hix + tix
-                } else if (tail & !self.mask) == head {
-                    0
-                } else {
-                    self.buffer.len()
-                };
-            }
+        let length = tail.wrapping_sub(head);
+        if length < self.buffer.len() {
+            length
+        } else {
+            self.capacity
         }
     }
 
