@@ -363,7 +363,7 @@ pub struct Local<T> {
 }
 
 impl<T> Local<T> {
-    /// Steals some items from local into another.
+    /// Steals some items from another into local.
     fn steal(&self, length: usize, f: impl Fn() -> Option<T>) {
         // Half of `src`'s length rounded up.
         let mut count = (length + 1) / 2;
@@ -461,7 +461,7 @@ impl<T> Local<T> {
         let tail = self.tail.load(Ordering::Acquire);
 
         let length = tail.wrapping_sub(head);
-        if length < self.buffer.len() {
+        if length <= self.buffer.len() {
             length
         } else {
             self.capacity
