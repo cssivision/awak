@@ -39,7 +39,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     let waker = waker_fn({
         let io_blocked = io_blocked.clone();
         move || {
-            if u.unpark() && !IO_POLLING.with(Cell::get) && io_blocked.load(Ordering::SeqCst) {
+            if u.unpark() && !IO_POLLING.with(Cell::get) && io_blocked.load(Ordering::Acquire) {
                 Reactor::get().notify();
             }
         }
@@ -75,10 +75,10 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
             loop {
                 IO_POLLING.with(|io| io.set(true));
-                io_blocked.store(true, Ordering::SeqCst);
+                io_blocked.store(true, Ordering::Release);
                 let _guard = CallOnDrop(|| {
                     IO_POLLING.with(|io| io.set(false));
-                    io_blocked.store(false, Ordering::SeqCst);
+                    io_blocked.store(false, Ordering::Release);
                 });
 
                 // Check if a notification has been received.

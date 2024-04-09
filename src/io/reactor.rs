@@ -54,11 +54,11 @@ impl Reactor {
     }
 
     pub fn add_block_on_count(&self) {
-        self.block_on_count.fetch_add(1, Ordering::SeqCst);
+        self.block_on_count.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn sub_block_on_count(&self) {
-        self.block_on_count.fetch_sub(1, Ordering::SeqCst);
+        self.block_on_count.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn get() -> &'static Reactor {
@@ -93,7 +93,7 @@ impl Reactor {
                         last_tick = tick;
                     }
 
-                    if Reactor::get().block_on_count.load(Ordering::SeqCst) > 0 {
+                    if Reactor::get().block_on_count.load(Ordering::Relaxed) > 0 {
                         // Exponential backoff from 50us to 10ms.
                         let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
                             .get(sleeps as usize)
