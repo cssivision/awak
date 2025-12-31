@@ -1,6 +1,6 @@
 [package]
 name = "awak"
-version = "0.2.36"
+version = "0.2.37"
 authors = ["cssivision <cssivision@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cssivision/awak"
@@ -10,10 +10,10 @@ edition = "2018"
 
 [dependencies]
 async-task = "4.0"
-rand = "0.8"
+rand = "0.9"
 libc = "0.2"
 slab = "0.4"
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 cfg-if = "1"
 pin-project-lite = "0.2"
 futures-io = "0.3"
