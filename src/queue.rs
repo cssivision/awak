@@ -78,7 +78,7 @@ impl<T> Queue<T> {
     }
 
     pub fn len(&self) -> usize {
-        let inner = self.inner.write().unwrap();
+        let inner = self.inner.read().unwrap();
         inner.length
     }
 

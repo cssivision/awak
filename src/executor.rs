@@ -192,8 +192,8 @@ pub struct Ticker {
     ///
     /// States a ticker can be in:
     /// 1) Woken.
-    /// 2a) Sleeping and unnotified.
-    /// 2b) Sleeping and notified.
+    ///    2a) Sleeping and unnotified.
+    ///    2b) Sleeping and notified.
     sleeping: AtomicUsize,
 
     /// Bumped every time a task is run.
@@ -270,7 +270,7 @@ impl Ticker {
                     // Bump the ticker.
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
-                    if ticks % 64 == 0 {
+                    if ticks.is_multiple_of(64) {
                         local_queue
                             .local
                             .steal(self.state.queue.len(), || self.state.queue.pop().ok());
@@ -366,7 +366,7 @@ impl<T> Local<T> {
     /// Steals some items from another into local.
     fn steal(&self, length: usize, f: impl Fn() -> Option<T>) {
         // Half of `src`'s length rounded up.
-        let mut count = (length + 1) / 2;
+        let mut count = length.div_ceil(2);
         if count > 0 {
             // Don't steal more than fits into local.
             count = count.min(self.capacity() - self.len());
