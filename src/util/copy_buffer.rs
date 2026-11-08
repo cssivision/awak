@@ -4,6 +4,10 @@ use std::task::{ready, Context, Poll};
 
 use futures_io::{AsyncRead, AsyncWrite};
 
+/// The buffer size used by [`CopyBuffer::new`], and therefore by
+/// [`copy_bidirectional`](super::copy_bidirectional).
+pub const DEFAULT_COPY_BUFFER_SIZE: usize = 1024 * 2;
+
 pub struct CopyBuffer {
     read_done: bool,
     pos: usize,
@@ -21,12 +25,22 @@ impl Default for CopyBuffer {
 
 impl CopyBuffer {
     pub fn new() -> CopyBuffer {
+        Self::with_buffer_size(DEFAULT_COPY_BUFFER_SIZE)
+    }
+
+    /// Creates a `CopyBuffer` that reads at most `buffer_size` bytes per
+    /// `poll_read` call.
+    ///
+    /// A `buffer_size` of zero is clamped to one: reading into an empty buffer
+    /// would be reported as EOF by most readers, ending the copy before any
+    /// data is moved.
+    pub fn with_buffer_size(buffer_size: usize) -> CopyBuffer {
         CopyBuffer {
             read_done: false,
             amt: 0,
             pos: 0,
             cap: 0,
-            buf: Box::new([0; 1024 * 2]),
+            buf: vec![0; buffer_size.max(1)].into_boxed_slice(),
             need_flush: false,
         }
     }
