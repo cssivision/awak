@@ -347,6 +347,19 @@ impl Future for YieldNow {
 }
 
 #[derive(Debug)]
+struct Slot<T> {
+    /// Sequence number coordinating producers and consumers.
+    ///
+    /// The slot at position `pos` is free when `sequence == pos`, filled when
+    /// `sequence == pos + 1`, and reusable once the consumer that took it
+    /// advances `sequence` to `pos + capacity`.
+    sequence: AtomicUsize,
+
+    /// Stores the value.
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+#[derive(Debug)]
 pub struct Local<T> {
     /// Concurrently updated by many threads.
     head: AtomicUsize,
@@ -357,8 +370,8 @@ pub struct Local<T> {
     /// Masks the head / tail position value to obtain the index in the buffer.
     mask: usize,
 
-    /// Stores the values.
-    buffer: Box<[UnsafeCell<MaybeUninit<T>>]>,
+    /// Stores the values, one sequence number per slot.
+    buffer: Box<[Slot<T>]>,
 
     /// capacity.
     capacity: usize,
@@ -392,8 +405,11 @@ impl<T> Local<T> {
         let mask = capacity - 1;
 
         let mut buffer = Vec::with_capacity(capacity);
-        for _ in 0..capacity {
-            buffer.push(UnsafeCell::new(MaybeUninit::uninit()));
+        for i in 0..capacity {
+            buffer.push(Slot {
+                sequence: AtomicUsize::new(i),
+                value: UnsafeCell::new(MaybeUninit::uninit()),
+            });
         }
 
         Local {
@@ -406,56 +422,73 @@ impl<T> Local<T> {
     }
 
     fn pop(&self) -> Result<T, ErrorEmpty> {
-        let mut head = self.head.load(Ordering::Acquire);
+        let mut head = self.head.load(Ordering::Relaxed);
         loop {
-            let tail = self.tail.load(Ordering::Acquire);
-            if head == tail {
-                // queue is empty
-                return Err(ErrorEmpty);
-            }
+            let slot = &self.buffer[head & self.mask];
+            let sequence = slot.sequence.load(Ordering::Acquire);
 
-            // Map the head position to a slot index.
-            let idx = head & self.mask;
-            let value = unsafe { self.buffer[idx].get().read() };
+            // `sequence == head + 1` means the value has been fully published.
+            match sequence.wrapping_sub(head.wrapping_add(1)) as isize {
+                0 => match self.head.compare_exchange_weak(
+                    head,
+                    head.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        // Safety: we claimed this slot, so no producer can
+                        // write to it until we publish the new sequence.
+                        let value = unsafe { slot.value.get().read().assume_init() };
 
-            // Attempt to claim the slot.
-            match self.head.compare_exchange(
-                head,
-                head.wrapping_add(1),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    return Ok(unsafe { value.assume_init() });
-                }
-                Err(current) => {
-                    head = current;
-                }
+                        // Make the slot available for a future lap.
+                        slot.sequence
+                            .store(head.wrapping_add(self.capacity), Ordering::Release);
+                        return Ok(value);
+                    }
+                    Err(current) => head = current,
+                },
+                // The slot has not been filled yet: the queue is empty.
+                diff if diff < 0 => return Err(ErrorEmpty),
+                // Another consumer took this slot; retry with the new head.
+                _ => head = self.head.load(Ordering::Relaxed),
             }
         }
     }
 
     fn push(&self, value: T) -> Result<(), ErrorFull<T>> {
-        let head = self.head.load(Ordering::Acquire);
-        // safety: this is the only thread that updates this cell.
-        let tail = self.tail.load(Ordering::Relaxed);
+        let mut tail = self.tail.load(Ordering::Relaxed);
+        loop {
+            let slot = &self.buffer[tail & self.mask];
+            let sequence = slot.sequence.load(Ordering::Acquire);
 
-        if tail.wrapping_sub(head) < self.buffer.len() {
-            // Map the position to a slot index.
-            let idx = tail & self.mask;
+            // `sequence == tail` means the slot is free and can be written.
+            match sequence.wrapping_sub(tail) as isize {
+                0 => match self.tail.compare_exchange_weak(
+                    tail,
+                    tail.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        // Safety: this slot is reserved for us, and no consumer
+                        // will read it until `sequence` is published.
+                        unsafe {
+                            slot.value.get().write(MaybeUninit::new(value));
+                        }
 
-            // Don't drop the previous value in `buffer[idx]` because
-            // it is uninitialized memory.
-            unsafe {
-                self.buffer[idx].get().write(MaybeUninit::new(value));
+                        // Publish the value to consumers.
+                        slot.sequence
+                            .store(tail.wrapping_add(1), Ordering::Release);
+                        return Ok(());
+                    }
+                    Err(current) => tail = current,
+                },
+                // The slot has not been consumed yet: the queue is full.
+                diff if diff < 0 => return Err(ErrorFull { inner: value }),
+                // Another producer reserved this slot; retry with the new tail.
+                _ => tail = self.tail.load(Ordering::Relaxed),
             }
-
-            // Make the index available
-            self.tail.store(tail.wrapping_add(1), Ordering::Release);
-            return Ok(());
         }
-        // The buffer is full.
-        Err(ErrorFull { inner: value })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -508,3 +541,70 @@ impl fmt::Display for ErrorEmpty {
 }
 
 impl Error for ErrorEmpty {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn local_queue_concurrent_push_pop() {
+        const N: usize = 200_000;
+
+        let queue = Arc::new(Local::new(64));
+        let done = Arc::new(AtomicBool::new(false));
+
+        let mut consumers = Vec::new();
+        for _ in 0..4 {
+            let queue = Arc::clone(&queue);
+            let done = Arc::clone(&done);
+            consumers.push(std::thread::spawn(move || {
+                let mut seen = Vec::new();
+                loop {
+                    match queue.pop() {
+                        Ok(value) => seen.push(value),
+                        Err(_) if done.load(Ordering::Acquire) => {
+                            while let Ok(value) = queue.pop() {
+                                seen.push(value);
+                            }
+                            return seen;
+                        }
+                        Err(_) => std::thread::yield_now(),
+                    }
+                }
+            }));
+        }
+
+        let producer = {
+            let queue = Arc::clone(&queue);
+            std::thread::spawn(move || {
+                for i in 0..N {
+                    let mut value = i;
+                    loop {
+                        match queue.push(value) {
+                            Ok(()) => break,
+                            Err(err) => {
+                                value = err.into_inner();
+                                std::thread::yield_now();
+                            }
+                        }
+                    }
+                }
+                done.store(true, Ordering::Release);
+            })
+        };
+        producer.join().unwrap();
+
+        let mut seen = vec![false; N];
+        let mut total = 0;
+        for consumer in consumers {
+            for value in consumer.join().unwrap() {
+                assert!(!seen[value], "value {value} was popped twice");
+                seen[value] = true;
+                total += 1;
+            }
+        }
+        assert_eq!(total, N);
+        assert!(seen.iter().all(|&seen| seen));
+    }
+}
