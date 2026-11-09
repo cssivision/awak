@@ -34,13 +34,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --locked --verbose
+        run: cargo build --verbose
 
       - name: Test
-        run: cargo test --locked --verbose
+        run: cargo test --verbose
 
       - name: Clippy
-        run: cargo clippy --locked -- -D warnings
+        run: cargo clippy -- -D warnings
 
   fmt:
     name: fmt
