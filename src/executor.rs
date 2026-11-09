@@ -264,9 +264,11 @@ impl Ticker {
                 }
                 Some(r) => {
                     self.wake();
-                    // Notify another ticker now to pick up where this ticker left off, just in
-                    // case running the task takes a long time.
-                    self.state.notify();
+                    // Notify another ticker to pick up leftover work, but only when there is
+                    // any: a wake-up per task is wasted work on the common single-task path.
+                    if !local_queue.local.is_empty() {
+                        self.state.notify();
+                    }
                     // Bump the ticker.
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
@@ -454,6 +456,10 @@ impl<T> Local<T> {
         }
         // The buffer is full.
         Err(ErrorFull { inner: value })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn len(&self) -> usize {

@@ -1,6 +1,7 @@
 use std::io;
 use std::os::unix::io::RawFd;
 use std::ptr;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::Event;
@@ -12,6 +13,7 @@ pub struct Reactor {
     event_fd: RawFd,
     /// File descriptor for the timerfd that produces timeouts.
     timer_fd: RawFd,
+    events: Mutex<Events>,
 }
 
 /// `timespec` value that equals zero.
@@ -44,6 +46,7 @@ impl Reactor {
             epoll_fd,
             event_fd,
             timer_fd,
+            events: Mutex::new(Events::new()),
         };
         reactor.insert(event_fd)?;
         reactor.insert(timer_fd)?;
@@ -88,8 +91,8 @@ impl Reactor {
         Ok(())
     }
 
-    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<Events> {
-        let mut events = Events::new();
+    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<EventsGuard<'_>> {
+        let mut events = self.events.lock().unwrap();
         let new_val = libc::itimerspec {
             it_interval: TS_ZERO,
             it_value: match timeout {
@@ -124,7 +127,7 @@ impl Reactor {
             buf.len()
         ));
         self.interest(self.event_fd, NOTIFY_KEY, true, false)?;
-        Ok(events)
+        Ok(EventsGuard { events })
     }
 
     pub fn notify(&self) -> io::Result<()> {
@@ -145,6 +148,22 @@ impl Drop for Reactor {
         let _ = syscall!(close(self.event_fd));
         let _ = syscall!(close(self.epoll_fd));
         let _ = syscall!(close(self.timer_fd));
+    }
+}
+
+/// A borrowed, reusable list of reported I/O events.
+pub struct EventsGuard<'a> {
+    events: MutexGuard<'a, Events>,
+}
+
+impl EventsGuard<'_> {
+    pub fn is_empty(&self) -> bool {
+        // The notification event does not count as I/O activity.
+        self.iter().next().is_none()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.events.iter().filter(|ev| ev.key != NOTIFY_KEY)
     }
 }
 

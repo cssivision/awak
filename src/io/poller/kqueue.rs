@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::ptr;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::Event;
@@ -12,6 +13,7 @@ pub struct Reactor {
     kqueue_fd: RawFd,
     write_stream: UnixStream,
     read_stream: UnixStream,
+    events: Mutex<Events>,
 }
 
 impl Reactor {
@@ -25,6 +27,7 @@ impl Reactor {
             kqueue_fd,
             write_stream,
             read_stream,
+            events: Mutex::new(Events::new()),
         };
         reactor.interest(reactor.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
         Ok(reactor)
@@ -136,8 +139,8 @@ impl Reactor {
         Ok(())
     }
 
-    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<Events> {
-        let mut events = Events::new();
+    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<EventsGuard<'_>> {
+        let mut events = self.events.lock().unwrap();
         // Convert the `Duration` to `libc::timespec`.
         let timeout = timeout.map(|t| libc::timespec {
             tv_sec: t.as_secs() as libc::time_t,
@@ -161,12 +164,28 @@ impl Reactor {
         // Clear the notification (if received) and re-register interest in it.
         while (&self.read_stream).read(&mut [0; 64]).is_ok() {}
         self.interest(self.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
-        Ok(events)
+        Ok(EventsGuard { events })
     }
 
     pub fn notify(&self) -> io::Result<()> {
         let _ = (&self.write_stream).write(&[1]);
         Ok(())
+    }
+}
+
+/// A borrowed, reusable list of reported I/O events.
+pub struct EventsGuard<'a> {
+    events: MutexGuard<'a, Events>,
+}
+
+impl EventsGuard<'_> {
+    pub fn is_empty(&self) -> bool {
+        // The notification event does not count as I/O activity.
+        self.iter().next().is_none()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.events.iter().filter(|ev| ev.key != NOTIFY_KEY)
     }
 }
 

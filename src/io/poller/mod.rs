@@ -60,13 +60,9 @@ impl Poller {
         }
     }
 
-    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<Vec<Event>> {
-        let sys_events = self.reactor.wait(timeout)?;
+    pub fn wait(&self, timeout: Option<Duration>) -> io::Result<sys::EventsGuard<'_>> {
+        let events = self.reactor.wait(timeout)?;
         self.notified.swap(false, Ordering::SeqCst);
-        let events = sys_events
-            .iter()
-            .filter(|ev| ev.key != usize::MAX)
-            .collect();
         Ok(events)
     }
 

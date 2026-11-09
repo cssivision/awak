@@ -169,7 +169,10 @@ impl<T> Async<T> {
 
 impl<T> Drop for Async<T> {
     fn drop(&mut self) {
-        let _ = Reactor::get().remove_io(&self.source);
+        // `into_inner` has already deregistered the I/O source.
+        if self.io.is_some() {
+            let _ = Reactor::get().remove_io(&self.source);
+        }
     }
 }
 

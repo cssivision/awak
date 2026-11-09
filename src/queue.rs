@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
-use std::sync::RwLock;
+use std::sync::Mutex;
 
 #[derive(Debug)]
 pub struct Queue<T> {
-    inner: RwLock<Inner<T>>,
+    inner: Mutex<Inner<T>>,
     capacity: usize,
 }
 
@@ -40,7 +40,7 @@ impl Error for ErrorEmpty {}
 impl<T> Queue<T> {
     pub fn bound(n: usize) -> Queue<T> {
         Queue {
-            inner: RwLock::new(Inner {
+            inner: Mutex::new(Inner {
                 queue: VecDeque::with_capacity(n),
                 length: 0,
             }),
@@ -50,7 +50,7 @@ impl<T> Queue<T> {
 
     pub fn unbound() -> Queue<T> {
         Queue {
-            inner: RwLock::new(Inner {
+            inner: Mutex::new(Inner {
                 queue: VecDeque::new(),
                 length: 0,
             }),
@@ -59,7 +59,7 @@ impl<T> Queue<T> {
     }
 
     pub fn pop(&self) -> Result<T, ErrorEmpty> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         if inner.length == 0 {
             return Err(ErrorEmpty);
         }
@@ -68,7 +68,7 @@ impl<T> Queue<T> {
     }
 
     pub fn push(&self, value: T) -> Result<(), ErrorFull> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         if self.capacity == inner.length {
             return Err(ErrorFull);
         }
@@ -78,7 +78,7 @@ impl<T> Queue<T> {
     }
 
     pub fn len(&self) -> usize {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.lock().unwrap();
         inner.length
     }
 

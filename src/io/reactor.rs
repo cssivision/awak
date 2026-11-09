@@ -30,6 +30,7 @@ pub(crate) struct Reactor {
     lock: Mutex<()>,
     timer_ops: Queue<TimerOp>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+    wakers: Mutex<Vec<Waker>>,
 }
 
 /// A single timer operation.
@@ -119,6 +120,7 @@ impl Reactor {
                 lock: Mutex::new(()),
                 timer_ops: Queue::bound(DEFAULT_TIME_OP_SIZE),
                 timers: Mutex::new(BTreeMap::new()),
+                wakers: Mutex::new(Vec::new()),
             }
         })
     }
@@ -139,7 +141,9 @@ impl Reactor {
     }
 
     fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
-        let mut wakers = Vec::new();
+        // Reuse the waker buffer across reactor iterations.
+        let mut wakers = self.wakers.lock().unwrap();
+        wakers.clear();
         // compute the timeout for blocking on I/O events.
         let next_timer = self.process_timers(&mut wakers);
 
@@ -164,7 +168,7 @@ impl Reactor {
             Ok(events) => {
                 let sources = self.sources.lock().unwrap();
 
-                for ev in events.into_iter() {
+                for ev in events.iter() {
                     if let Some(source) = sources.get(ev.key) {
                         let mut states = source.states.lock().unwrap();
 
@@ -198,7 +202,7 @@ impl Reactor {
         };
 
         // Wake up ready tasks.
-        for waker in wakers {
+        for waker in wakers.drain(..) {
             waker.wake();
         }
         res
