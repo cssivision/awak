@@ -477,8 +477,7 @@ impl<T> Local<T> {
                         }
 
                         // Publish the value to consumers.
-                        slot.sequence
-                            .store(tail.wrapping_add(1), Ordering::Release);
+                        slot.sequence.store(tail.wrapping_add(1), Ordering::Release);
                         return Ok(());
                     }
                     Err(current) => tail = current,
@@ -599,7 +598,7 @@ mod tests {
         let mut total = 0;
         for consumer in consumers {
             for value in consumer.join().unwrap() {
-                assert!(!seen[value], "value {value} was popped twice");
+                assert!(!seen[value], "value {} was popped twice", value);
                 seen[value] = true;
                 total += 1;
             }

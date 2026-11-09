@@ -1,67 +1,58 @@
-name: build
+name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: ["**"]
   pull_request:
-    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-
+  test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: [stable]
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install latest ${{ matrix.rust }}
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: ${{ matrix.rust }}
-        profile: minimal
-        override: true
-      
-    - name: Build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --verbose
+      - uses: actions/checkout@v4
 
-    - name: Test
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
-        args: --verbose
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
-    - run: rustup component add clippy
-    
-    - name: Clippy
-      uses: actions-rs/cargo@v1
-      with:
-        command: clippy
-        args: -- -D warnings
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --verbose
+
+      - name: Test
+        run: cargo test --locked --verbose
+
+      - name: Clippy
+        run: cargo clippy --locked -- -D warnings
 
   fmt:
     name: fmt
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust
-        run: rustup update stable
-      - name: Install rustfmt
-        run: rustup component add rustfmt
 
-      - name: "rustfmt --check"
-        run: |
-          if ! rustfmt --check --edition 2018 $(find . -name '*.rs' -print); then
-            printf "Please run \`rustfmt --edition 2018 \$(find . -name '*.rs' -print)\` to fix rustfmt errors.\n" >&2
-            exit 1
-          fi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: rustfmt --check
+        run: cargo fmt --all -- --check
