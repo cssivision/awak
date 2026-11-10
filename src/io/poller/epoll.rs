@@ -32,6 +32,20 @@ fn write_flags() -> libc::c_int {
     libc::EPOLLOUT | libc::EPOLLHUP | libc::EPOLLERR
 }
 
+/// How readiness is reported for descriptors registered by the reactor.
+///
+/// By default registrations are one-shot: the kernel reports an event once and
+/// the reactor re-arms the descriptor when a task asks for readiness again.
+/// With the `edge-triggered` feature the descriptor stays registered and the
+/// kernel only reports transitions from "not ready" to "ready".
+fn mode_flags() -> libc::c_int {
+    if cfg!(feature = "edge-triggered") {
+        libc::EPOLLET
+    } else {
+        libc::EPOLLONESHOT
+    }
+}
+
 impl Reactor {
     pub fn new() -> io::Result<Reactor> {
         let epoll_fd = syscall!(epoll_create(1024))?;
@@ -51,11 +65,12 @@ impl Reactor {
         reactor.insert(event_fd)?;
         reactor.insert(timer_fd)?;
         reactor.interest(event_fd, NOTIFY_KEY, true, false)?;
+        reactor.interest(timer_fd, NOTIFY_KEY, true, false)?;
         Ok(reactor)
     }
 
     pub fn interest(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-        let mut flags = libc::EPOLLONESHOT;
+        let mut flags = mode_flags();
         if read {
             flags |= read_flags();
         }
@@ -74,7 +89,7 @@ impl Reactor {
         let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
         syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
         let mut ev = libc::epoll_event {
-            events: libc::EPOLLONESHOT as _,
+            events: mode_flags() as _,
             u64: 0u64,
         };
         syscall!(epoll_ctl(self.epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut ev))?;
@@ -104,6 +119,7 @@ impl Reactor {
             },
         };
         syscall!(timerfd_settime(self.timer_fd, 0, &new_val, ptr::null_mut()))?;
+        #[cfg(not(feature = "edge-triggered"))]
         self.interest(self.timer_fd, NOTIFY_KEY, true, false)?;
         // Timeout in milliseconds for epoll.
         let timeout_ms = if timeout == Some(Duration::from_secs(0)) {
@@ -126,6 +142,15 @@ impl Reactor {
             &mut buf[0] as *mut u8 as *mut libc::c_void,
             buf.len()
         ));
+        // Drain the timer as well: edge-triggered readiness only fires when
+        // the expiration counter goes from zero to non-zero again.
+        #[cfg(feature = "edge-triggered")]
+        let _ = syscall!(read(
+            self.timer_fd,
+            &mut buf[0] as *mut u8 as *mut libc::c_void,
+            buf.len()
+        ));
+        #[cfg(not(feature = "edge-triggered"))]
         self.interest(self.event_fd, NOTIFY_KEY, true, false)?;
         Ok(EventsGuard { events })
     }

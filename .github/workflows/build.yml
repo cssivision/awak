@@ -45,8 +45,13 @@ jobs:
         # trigger when optimizations are on, so run them in release too.
         run: cargo test --release --verbose
 
+      - name: Test (edge-triggered)
+        # The edge-triggered poller uses different kernel flags (`EPOLLET` /
+        # `EV_CLEAR`), so it needs its own run.
+        run: cargo test --release --features edge-triggered --verbose
+
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-features -- -D warnings
 
   fmt:
     name: fmt

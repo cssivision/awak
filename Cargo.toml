@@ -8,6 +8,12 @@ homepage = "https://github.com/cssivision/awak"
 description = "A small async runtime for Rust"
 edition = "2018"
 
+[features]
+default = []
+# Report readiness with edge-triggered semantics (`EPOLLET` on Linux/Android,
+# `EV_CLEAR` on macOS/BSD) instead of one-shot registrations.
+edge-triggered = []
+
 [dependencies]
 async-task = "4.7"
 rand = "0.10"
