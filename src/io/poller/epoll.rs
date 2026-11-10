@@ -208,10 +208,15 @@ impl Events {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
-        self.list[..self.len].iter().map(|ev| Event {
-            key: ev.u64 as usize,
-            readable: (ev.events as libc::c_int & read_flags()) != 0,
-            writable: (ev.events as libc::c_int & write_flags()) != 0,
+        self.list[..self.len].iter().map(|ev| {
+            let flags = ev.events as libc::c_int;
+            Event {
+                key: ev.u64 as usize,
+                readable: (flags & read_flags()) != 0,
+                writable: (flags & write_flags()) != 0,
+                read_closed: (flags & (libc::EPOLLHUP | libc::EPOLLERR | libc::EPOLLRDHUP)) != 0,
+                write_closed: (flags & (libc::EPOLLHUP | libc::EPOLLERR)) != 0,
+            }
         })
     }
 }

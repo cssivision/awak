@@ -45,6 +45,10 @@ pub struct Event {
     pub readable: bool,
     /// Is the I/O handle writable?
     pub writable: bool,
+    /// Is the read side of the I/O handle closed?
+    pub read_closed: bool,
+    /// Is the write side of the I/O handle closed?
+    pub write_closed: bool,
 }
 
 pub struct Poller {

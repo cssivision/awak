@@ -243,6 +243,8 @@ impl Events {
             readable: ev.filter == libc::EVFILT_READ,
             writable: ev.filter == libc::EVFILT_WRITE
                 || (ev.filter == libc::EVFILT_READ && (ev.flags & libc::EV_EOF) != 0),
+            read_closed: ev.filter == libc::EVFILT_READ && (ev.flags & libc::EV_EOF) != 0,
+            write_closed: ev.filter == libc::EVFILT_WRITE && (ev.flags & libc::EV_EOF) != 0,
         })
     }
 }

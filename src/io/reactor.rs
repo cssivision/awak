@@ -170,22 +170,18 @@ impl Reactor {
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
-                            states[READ].tick = tick + 1;
-                            wakers.append(&mut states[READ].wakers);
+                            states.dirs[READ].tick = tick;
+                            states.dirs[READ].ready = true;
+                            states.dirs[READ].closed |= ev.read_closed;
+                            wakers.append(&mut states.dirs[READ].wakers);
                         }
 
                         // Wake writers if a writability event was emitted.
                         if ev.writable {
-                            states[WRITE].tick = tick + 1;
-                            wakers.append(&mut states[WRITE].wakers);
-                        }
-                        if !(states[WRITE].wakers.is_empty() && states[READ].wakers.is_empty()) {
-                            self.poller.interest(
-                                source.raw,
-                                source.key,
-                                !states[READ].wakers.is_empty(),
-                                !states[WRITE].wakers.is_empty(),
-                            )?;
+                            states.dirs[WRITE].tick = tick;
+                            states.dirs[WRITE].ready = true;
+                            states.dirs[WRITE].closed |= ev.write_closed;
+                            wakers.append(&mut states.dirs[WRITE].wakers);
                         }
                     }
                 }
@@ -313,7 +309,16 @@ pub(crate) struct Source {
     /// The key of this source obtained during registration.
     key: usize,
     /// Tasks interested in events on this source.
-    states: Mutex<[State; 2]>,
+    states: Mutex<States>,
+}
+
+#[derive(Default, Debug)]
+struct States {
+    /// Readiness state for the read and write directions.
+    dirs: [State; 2],
+    /// Whether an edge-triggered registration is already armed.
+    #[cfg(feature = "edge-triggered")]
+    armed: bool,
 }
 
 #[derive(Default, Debug)]
@@ -322,54 +327,92 @@ struct State {
     wakers: Vec<Waker>,
     /// Last reactor tick that delivered an event.
     tick: usize,
-    /// Ticks remembered by `poll_readable()` or `poll_writable()`.
-    ticks: Option<(usize, usize)>,
+    /// Whether an event has been delivered and not consumed yet.
+    ready: bool,
+    /// Whether the source has been closed in this direction.
+    closed: bool,
 }
 
 impl Source {
     pub async fn readable(&self) -> io::Result<()> {
-        poll_fn(|cx| self.poll_ready(READ, cx)).await
+        self.readable_tick().await.map(|_| ())
     }
 
     pub async fn writable(&self) -> io::Result<()> {
+        self.writable_tick().await.map(|_| ())
+    }
+
+    /// Waits until the source is readable and returns the readiness tick.
+    pub async fn readable_tick(&self) -> io::Result<usize> {
+        poll_fn(|cx| self.poll_ready(READ, cx)).await
+    }
+
+    /// Waits until the source is writable and returns the readiness tick.
+    pub async fn writable_tick(&self) -> io::Result<usize> {
         poll_fn(|cx| self.poll_ready(WRITE, cx)).await
     }
 
-    pub fn poll_readable(&self, cx: &Context) -> Poll<io::Result<()>> {
+    pub fn poll_readable_tick(&self, cx: &Context) -> Poll<io::Result<usize>> {
         self.poll_ready(READ, cx)
     }
 
-    pub fn poll_writable(&self, cx: &Context) -> Poll<io::Result<()>> {
+    pub fn poll_writable_tick(&self, cx: &Context) -> Poll<io::Result<usize>> {
         self.poll_ready(WRITE, cx)
     }
 
-    pub fn poll_ready(&self, op: usize, cx: &Context) -> Poll<io::Result<()>> {
+    /// Clears the readiness bit for `op` unless a newer event has arrived.
+    pub fn clear_ready(&self, op: usize, tick: usize) {
         let mut states = self.states.lock().unwrap();
-        if let Some((a, b)) = states[op].ticks {
-            if states[op].tick != a && states[op].tick != b {
-                states[op].ticks = None;
-                return Poll::Ready(Ok(()));
-            }
+        let state = &mut states.dirs[op];
+        if state.tick == tick {
+            state.ready = false;
         }
-        let was_empty = states[op].wakers.is_empty();
-        if states[op].wakers.iter().all(|w| !w.will_wake(cx.waker())) {
-            states[op].wakers.push(cx.waker().clone());
+    }
+
+    pub fn clear_readable(&self, tick: usize) {
+        self.clear_ready(READ, tick);
+    }
+
+    pub fn clear_writable(&self, tick: usize) {
+        self.clear_ready(WRITE, tick);
+    }
+
+    pub fn poll_ready(&self, op: usize, cx: &Context) -> Poll<io::Result<usize>> {
+        let mut states = self.states.lock().unwrap();
+        if states.dirs[op].closed || states.dirs[op].ready {
+            return Poll::Ready(Ok(states.dirs[op].tick));
         }
-        if states[op].ticks.is_none() {
-            states[op].ticks = Some((
-                Reactor::get().ticker.load(Ordering::SeqCst),
-                states[op].tick,
-            ));
+
+        #[cfg(not(feature = "edge-triggered"))]
+        let was_empty = states.dirs[op].wakers.is_empty();
+
+        if states.dirs[op]
+            .wakers
+            .iter()
+            .all(|w| !w.will_wake(cx.waker()))
+        {
+            states.dirs[op].wakers.push(cx.waker().clone());
         }
+
+        #[cfg(feature = "edge-triggered")]
+        if !states.armed {
+            // Edge-triggered registrations stay armed for the lifetime of the
+            // source, so events keep flowing without further `epoll_ctl` calls.
+            Reactor::get().interest(self.raw, self.key, true, true)?;
+            states.armed = true;
+        }
+
+        #[cfg(not(feature = "edge-triggered"))]
         if was_empty {
-            // no wakers, register in reactor
+            // One-shot registrations must be re-armed on every wait.
             Reactor::get().interest(
                 self.raw,
                 self.key,
-                !states[READ].wakers.is_empty(),
-                !states[WRITE].wakers.is_empty(),
+                !states.dirs[READ].wakers.is_empty(),
+                !states.dirs[WRITE].wakers.is_empty(),
             )?;
         }
+
         Poll::Pending
     }
 }
