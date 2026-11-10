@@ -164,7 +164,7 @@ impl Reactor {
             Ok(events) => {
                 let sources = self.sources.lock().unwrap();
 
-                for ev in events.into_iter() {
+                for ev in events.iter() {
                     if let Some(source) = sources.get(ev.key) {
                         let mut states = source.states.lock().unwrap();
 

@@ -169,7 +169,10 @@ impl<T> Async<T> {
 
 impl<T> Drop for Async<T> {
     fn drop(&mut self) {
-        let _ = Reactor::get().remove_io(&self.source);
+        // `into_inner` has already deregistered the I/O source.
+        if self.io.is_some() {
+            let _ = Reactor::get().remove_io(&self.source);
+        }
     }
 }
 
@@ -332,5 +335,27 @@ impl Drop for Timer {
         if self.waker.take().is_some() {
             Reactor::get().remove_timer(self.deadline, self.key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    /// `into_inner` already deregisters the source, so the `Drop` that follows
+    /// must not remove it a second time: doing so panics with `invalid key`
+    /// because the slab entry is gone.
+    #[test]
+    fn into_inner_then_drop_does_not_panic() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let (server_side, _) = listener.accept().unwrap();
+        drop(server_side);
+
+        let wrapped = Async::new(client).unwrap();
+        let inner = wrapped.into_inner().unwrap();
+        drop(inner);
     }
 }

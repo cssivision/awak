@@ -4,8 +4,7 @@ use std::task::{Context, Poll};
 
 use awak::block_on;
 use awak::util::{
-    copy_bidirectional, copy_bidirectional_with_buffer_size, CopyBidirectional,
-    DEFAULT_COPY_BUFFER_SIZE,
+    copy_bidirectional, copy_bidirectional_with_sizes, CopyBidirectional, DEFAULT_COPY_BUFFER_SIZE,
 };
 use futures_io::{AsyncRead, AsyncWrite};
 
@@ -108,11 +107,7 @@ fn copy_bidirectional_honours_explicit_buffer_size() {
     let mut a = MockIo::new(a_data.clone());
     let mut b = MockIo::new(b_data.clone());
 
-    let counts = run_copy(copy_bidirectional_with_buffer_size(
-        &mut a,
-        &mut b,
-        32 * 1024,
-    ));
+    let counts = run_copy(copy_bidirectional_with_sizes(&mut a, &mut b, 32 * 1024));
 
     assert_eq!(counts, (a_data.len() as u64, b_data.len() as u64));
     assert_eq!(a.written, b_data);
@@ -129,7 +124,7 @@ fn copy_bidirectional_builder_copies_all_data() {
     let mut a = MockIo::new(a_data.clone());
     let mut b = MockIo::new(b_data);
 
-    let counts = run_copy(CopyBidirectional::with_buffer_size(&mut a, &mut b, 4096));
+    let counts = run_copy(CopyBidirectional::with_sizes(&mut a, &mut b, 4096));
 
     assert_eq!(counts, (a_data.len() as u64, 0));
     assert_eq!(b.written, a_data);
@@ -143,7 +138,7 @@ fn copy_bidirectional_clamps_zero_buffer_size() {
     let mut a = MockIo::new(a_data.clone());
     let mut b = MockIo::new(Vec::new());
 
-    let counts = run_copy(copy_bidirectional_with_buffer_size(&mut a, &mut b, 0));
+    let counts = run_copy(copy_bidirectional_with_sizes(&mut a, &mut b, 0));
 
     assert_eq!(counts, (a_data.len() as u64, 0));
     assert_eq!(b.written, a_data);

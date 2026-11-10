@@ -1,6 +1,6 @@
 [package]
 name = "awak"
-version = "0.2.38"
+version = "0.2.39"
 authors = ["cssivision <cssivision@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cssivision/awak"
@@ -9,8 +9,8 @@ description = "A small async runtime for Rust"
 edition = "2018"
 
 [dependencies]
-async-task = "4.0"
-rand = "0.9"
+async-task = "4.7"
+rand = "0.10"
 libc = "0.2"
 slab = "0.4"
 socket2 = { version = "0.6", features = ["all"] }
