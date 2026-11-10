@@ -25,7 +25,7 @@ impl Default for CopyBuffer {
 
 impl CopyBuffer {
     pub fn new() -> CopyBuffer {
-        Self::with_buffer_size(DEFAULT_COPY_BUFFER_SIZE)
+        Self::with_sizes(DEFAULT_COPY_BUFFER_SIZE)
     }
 
     /// Creates a `CopyBuffer` that reads at most `buffer_size` bytes per
@@ -34,7 +34,7 @@ impl CopyBuffer {
     /// A `buffer_size` of zero is clamped to one: reading into an empty buffer
     /// would be reported as EOF by most readers, ending the copy before any
     /// data is moved.
-    pub fn with_buffer_size(buffer_size: usize) -> CopyBuffer {
+    pub fn with_sizes(buffer_size: usize) -> CopyBuffer {
         CopyBuffer {
             read_done: false,
             amt: 0,

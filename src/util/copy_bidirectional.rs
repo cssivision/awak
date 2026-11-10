@@ -17,8 +17,8 @@ enum TransferState {
 ///
 /// Each direction reads from its source into a buffer of
 /// [`DEFAULT_COPY_BUFFER_SIZE`] bytes and writes that buffer out before reading
-/// again. Use [`CopyBidirectional::with_buffer_size`] (or
-/// [`copy_bidirectional_with_buffer_size`]) to pick another size.
+/// again. Use [`CopyBidirectional::with_sizes`] (or
+/// [`copy_bidirectional_with_sizes`]) to pick another size.
 ///
 /// ```
 /// # use std::io;
@@ -29,7 +29,7 @@ enum TransferState {
 /// # {
 /// use awak::util::CopyBidirectional;
 ///
-/// CopyBidirectional::with_buffer_size(a, b, 64 * 1024).await?;
+/// CopyBidirectional::with_sizes(a, b, 64 * 1024).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -47,7 +47,7 @@ where
 {
     /// Copies with the default buffer size of [`DEFAULT_COPY_BUFFER_SIZE`].
     pub fn new(a: &'a mut A, b: &'a mut B) -> Self {
-        Self::with_buffer_size(a, b, DEFAULT_COPY_BUFFER_SIZE)
+        Self::with_sizes(a, b, DEFAULT_COPY_BUFFER_SIZE)
     }
 
     /// Copies with a buffer of `buffer_size` bytes in each direction.
@@ -55,12 +55,12 @@ where
     /// Larger buffers mean fewer reads, writes and (for wrapped transports)
     /// fewer framing records per byte copied. A `buffer_size` of zero is
     /// clamped to one.
-    pub fn with_buffer_size(a: &'a mut A, b: &'a mut B, buffer_size: usize) -> Self {
+    pub fn with_sizes(a: &'a mut A, b: &'a mut B, buffer_size: usize) -> Self {
         CopyBidirectional {
             a,
             b,
-            a_to_b: TransferState::Running(CopyBuffer::with_buffer_size(buffer_size)),
-            b_to_a: TransferState::Running(CopyBuffer::with_buffer_size(buffer_size)),
+            a_to_b: TransferState::Running(CopyBuffer::with_sizes(buffer_size)),
+            b_to_a: TransferState::Running(CopyBuffer::with_sizes(buffer_size)),
         }
     }
 }
@@ -130,7 +130,7 @@ where
 
 /// Same as [`copy_bidirectional`], but each direction uses a buffer of
 /// `buffer_size` bytes.
-pub async fn copy_bidirectional_with_buffer_size<A, B>(
+pub async fn copy_bidirectional_with_sizes<A, B>(
     a: &mut A,
     b: &mut B,
     buffer_size: usize,
@@ -139,5 +139,5 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    CopyBidirectional::with_buffer_size(a, b, buffer_size).await
+    CopyBidirectional::with_sizes(a, b, buffer_size).await
 }
