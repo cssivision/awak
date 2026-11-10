@@ -284,9 +284,11 @@ impl Ticker {
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
                     if ticks.is_multiple_of(64) {
-                        local_queue
-                            .local
-                            .steal(self.state.queue.len(), || self.state.queue.pop().ok());
+                        local_queue.local.steal(
+                            self.state.queue.len(),
+                            || self.state.queue.pop().ok(),
+                            |r| self.put_back(r),
+                        );
                     }
                     Poll::Ready(r)
                 }
@@ -303,9 +305,11 @@ impl Ticker {
 
         // Try stealing from the global queue.
         if let Ok(r) = self.state.queue.pop() {
-            local_queue
-                .local
-                .steal(self.state.queue.len(), || self.state.queue.pop().ok());
+            local_queue.local.steal(
+                self.state.queue.len(),
+                || self.state.queue.pop().ok(),
+                |r| self.put_back(r),
+            );
             return Some(r);
         }
 
@@ -324,14 +328,27 @@ impl Ticker {
 
         // Try stealing from each shard in the list.
         for shard in iter {
-            local_queue
-                .local
-                .steal(shard.local.len(), || shard.local.pop().ok());
+            local_queue.local.steal(
+                shard.local.len(),
+                || shard.local.pop().ok(),
+                |r| self.put_back(r),
+            );
             if let Ok(r) = local_queue.local.pop() {
                 return Some(r);
             }
         }
         None
+    }
+
+    /// Returns a task that could not fit into a local queue to the global one.
+    ///
+    /// The global queue is unbounded, so this never loses the task. Without it a
+    /// stolen `Runnable` would be dropped, which cancels the task and makes the
+    /// awaiting `Task` panic with `polled after completion`.
+    fn put_back(&self, runnable: Runnable) {
+        if self.state.queue.push(runnable).is_ok() {
+            self.state.notify();
+        }
     }
 }
 
@@ -390,17 +407,28 @@ pub struct Local<T> {
 
 impl<T> Local<T> {
     /// Steals some items from another into local.
-    fn steal(&self, length: usize, f: impl Fn() -> Option<T>) {
+    ///
+    /// `on_full` receives any value that could not be pushed because this queue
+    /// filled up in the meantime. `steal` must never drop a stolen value: for
+    /// `Runnable` that cancels the task, and awaiting the cancelled task panics.
+    /// The budget below is computed from a snapshot of `len()`, so a concurrent
+    /// writer targeting the same queue can invalidate it.
+    fn steal(&self, length: usize, mut f: impl FnMut() -> Option<T>, mut on_full: impl FnMut(T)) {
         // Half of `src`'s length rounded up.
         let mut count = length.div_ceil(2);
         if count > 0 {
-            // Don't steal more than fits into local.
-            count = count.min(self.capacity() - self.len());
+            // Don't steal more than fits into local. `saturating_sub` because
+            // `len` is a snapshot and may be stale by the time we use it.
+            count = count.min(self.capacity().saturating_sub(self.len()));
             for _ in 0..count {
-                if let Some(t) = f() {
-                    let _ = self.push(t);
-                } else {
-                    break;
+                match f() {
+                    Some(t) => {
+                        if let Err(e) = self.push(t) {
+                            on_full(e.into_inner());
+                            break;
+                        }
+                    }
+                    None => break,
                 }
             }
         }
@@ -646,7 +674,11 @@ mod tests {
                         // `tail` updates actually overlap.
                         barrier.wait();
                         for i in 0..PER_THREAD {
-                            victim.steal(1, || Some(thread * PER_THREAD + i));
+                            victim.steal(
+                                1,
+                                || Some(thread * PER_THREAD + i),
+                                |_| panic!("test queue is sized to hold every value"),
+                            );
                         }
                     })
                 })
@@ -679,6 +711,69 @@ mod tests {
                     missing
                 );
             }
+        }
+    }
+
+    /// A queue that fills up while `steal` is running must hand the leftover
+    /// values to `on_full` instead of dropping them.
+    ///
+    /// `steal` budgets from a `len()` snapshot, so a concurrent writer targeting
+    /// the same queue can fill it after the budget was computed. Dropping a
+    /// `Runnable` cancels the task and awaiting it panics with `polled after
+    /// completion`, so a lost value here is a user-visible failure.
+    ///
+    /// The race is simulated by having `f` fill the destination itself, which is
+    /// exactly what a second writer would do.
+    #[test]
+    fn steal_returns_overflow_instead_of_dropping() {
+        const ROUNDS: usize = 20;
+
+        for _ in 0..ROUNDS {
+            let dest = Local::<usize>::new(8);
+            let source_items = 100;
+            let mut spilled = Vec::new();
+            let mut next = 0;
+            let mut filled_by_other_writer = false;
+
+            dest.steal(
+                source_items,
+                || {
+                    if next >= source_items {
+                        return None;
+                    }
+                    // A concurrent writer grabs the remaining space right after
+                    // `steal` computed its budget.
+                    if !filled_by_other_writer {
+                        filled_by_other_writer = true;
+                        while dest.push(9999).is_ok() {}
+                    }
+                    let v = next;
+                    next += 1;
+                    Some(v)
+                },
+                |v| spilled.push(v),
+            );
+
+            assert!(
+                filled_by_other_writer,
+                "test setup did not simulate a concurrent writer"
+            );
+            assert!(
+                !spilled.is_empty(),
+                "steal dropped values instead of reporting them via on_full"
+            );
+            // Every value pulled from the source is either in the queue or was
+            // handed back.
+            let mut drained = Vec::new();
+            while let Ok(v) = dest.pop() {
+                drained.push(v);
+            }
+            let stolen_total = drained.iter().filter(|v| **v != 9999).count() + spilled.len();
+            assert_eq!(
+                stolen_total, next,
+                "steal lost values: pulled {} from source but accounted for {}",
+                next, stolen_total
+            );
         }
     }
 }
