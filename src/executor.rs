@@ -260,6 +260,17 @@ impl Ticker {
             match self.search(local_queue) {
                 None => {
                     self.sleep(cx.waker());
+
+                    // A task pushed between the `search` above and the point
+                    // where this ticker became a registered sleeper could not
+                    // wake anyone: `notify` found no sleeper and only set
+                    // `notified`, which `sleep` then overwrote. Re-check now
+                    // that we are registered so such a task cannot be stranded.
+                    if let Some(r) = self.search(local_queue) {
+                        self.wake();
+                        return Poll::Ready(r);
+                    }
+
                     Poll::Pending
                 }
                 Some(r) => {
@@ -605,5 +616,69 @@ mod tests {
         }
         assert_eq!(total, N);
         assert!(seen.iter().all(|&seen| seen));
+    }
+
+    /// `Ticker::search` lets several tickers run `steal` against the *same*
+    /// `Local` shard, so `push` has more than one writer. When `push` assumed a
+    /// single writer, concurrent steals overwrote each other's slot and values
+    /// were lost, which stranded the executor.
+    ///
+    /// The queue is sized so that every value fits: `steal` silently drops a
+    /// value when `push` reports the queue full, which would otherwise make this
+    /// test fail for an unrelated reason.
+    #[test]
+    fn local_queue_concurrent_steal_loses_nothing() {
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 500;
+        const TOTAL: usize = THREADS * PER_THREAD;
+        const ROUNDS: usize = 30;
+
+        for _ in 0..ROUNDS {
+            let victim = Arc::new(Local::new(TOTAL.next_power_of_two()));
+            let barrier = Arc::new(std::sync::Barrier::new(THREADS));
+
+            let stealers: Vec<_> = (0..THREADS)
+                .map(|thread| {
+                    let victim = Arc::clone(&victim);
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        // Release all writers at the same instant so their
+                        // `tail` updates actually overlap.
+                        barrier.wait();
+                        for i in 0..PER_THREAD {
+                            victim.steal(1, || Some(thread * PER_THREAD + i));
+                        }
+                    })
+                })
+                .collect();
+            for stealer in stealers {
+                stealer.join().unwrap();
+            }
+
+            let mut values = Vec::new();
+            while let Ok(value) = victim.pop() {
+                values.push(value);
+            }
+            values.sort_unstable();
+
+            // Report a compact summary rather than dumping both vectors.
+            if values.len() != TOTAL {
+                let unique: std::collections::HashSet<_> = values.iter().copied().collect();
+                panic!(
+                    "concurrent steals lost items: drained {} of {} values ({} unique)",
+                    values.len(),
+                    TOTAL,
+                    unique.len()
+                );
+            }
+            let expected: Vec<usize> = (0..TOTAL).collect();
+            if values != expected {
+                let missing = expected.iter().filter(|v| !values.contains(v)).count();
+                panic!(
+                    "concurrent steals corrupted order/content: {} values missing",
+                    missing
+                );
+            }
+        }
     }
 }
