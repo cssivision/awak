@@ -275,11 +275,14 @@ impl Ticker {
                 }
                 Some(r) => {
                     self.wake();
-                    // Notify another ticker to pick up leftover work, but only when there is
-                    // any: a wake-up per task is wasted work on the common single-task path.
-                    if !local_queue.local.is_empty() {
-                        self.state.notify();
-                    }
+                    // Notify another ticker so that a spare one keeps looking for work and
+                    // driving the reactor. This must not be gated on `local_queue.local` being
+                    // non-empty: wake-ups that happen on a ticker thread are pushed into that
+                    // ticker's shard by `Executor::spawn`, so on the common path the local
+                    // queue is empty right here. Gating on it leaves the executor with a single
+                    // awake thread that both delivers I/O events and runs the tasks, which
+                    // serializes concurrent tasks on one core.
+                    self.state.notify();
                     // Bump the ticker.
                     let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
                     // Steal tasks from the global queue to ensure fair task scheduling.
