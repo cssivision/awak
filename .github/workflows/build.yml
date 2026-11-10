@@ -39,6 +39,12 @@ jobs:
       - name: Test
         run: cargo test --verbose
 
+      - name: Test (release)
+        # The stress tests in `tests/stress.rs` and the executor unit tests are
+        # timing sensitive: a lost task or a missed wake-up is far easier to
+        # trigger when optimizations are on, so run them in release too.
+        run: cargo test --release --verbose
+
       - name: Clippy
         run: cargo clippy -- -D warnings
 
