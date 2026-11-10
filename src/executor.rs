@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use async_task::{Runnable, Task};
-use rand::Rng;
+use rand::RngExt;
 use thread_local::ThreadLocal;
 
 use crate::queue::Queue;
