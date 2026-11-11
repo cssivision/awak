@@ -1,3 +1,8 @@
+// The integer type behind the `EV_*` constants differs between platforms
+// (`u16` on macOS, `u32` on some BSDs), so casts to `u16` are not always
+// required and cannot be written portably without them.
+#![allow(clippy::unnecessary_cast)]
+
 use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -8,6 +13,20 @@ use std::time::Duration;
 use super::Event;
 
 const NOTIFY_KEY: usize = usize::MAX;
+
+/// How readiness is reported for descriptors registered by the reactor.
+///
+/// By default registrations are one-shot (`EV_ONESHOT`): the kernel reports an
+/// event once and the reactor re-arms the descriptor when a task asks for
+/// readiness again. With the `edge-triggered` feature the descriptor stays
+/// registered (`EV_CLEAR`) and the kernel only reports state changes.
+fn mode_flags() -> u16 {
+    if cfg!(feature = "edge-triggered") {
+        libc::EV_CLEAR as u16
+    } else {
+        libc::EV_ONESHOT as u16
+    }
+}
 
 pub struct Reactor {
     kqueue_fd: RawFd,
@@ -33,7 +52,14 @@ impl Reactor {
         Ok(reactor)
     }
 
-    pub fn insert(&self, fd: RawFd) -> io::Result<()> {
+    /// Makes `fd` non-blocking.
+    ///
+    /// kqueue registers a descriptor on the first `kevent` for it, and that call
+    /// already carries the right `udata`, so there is no key to pass here. The
+    /// parameter is accepted to keep the signature in step with epoll, where the
+    /// key must be known at insert time.
+    pub fn insert(&self, fd: RawFd, key: usize) -> io::Result<()> {
+        let _ = key;
         let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
         syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
         Ok(())
@@ -46,8 +72,8 @@ impl Reactor {
         readable: bool,
         writable: bool,
     ) -> io::Result<()> {
-        let mut read_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
-        let mut write_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
+        let mut read_flags = mode_flags() | libc::EV_RECEIPT as u16;
+        let mut write_flags = mode_flags() | libc::EV_RECEIPT as u16;
         if readable {
             read_flags |= libc::EV_ADD;
         } else {
@@ -163,6 +189,7 @@ impl Reactor {
         events.len = res as usize;
         // Clear the notification (if received) and re-register interest in it.
         while (&self.read_stream).read(&mut [0; 64]).is_ok() {}
+        #[cfg(not(feature = "edge-triggered"))]
         self.interest(self.read_stream.as_raw_fd(), NOTIFY_KEY, true, false)?;
         Ok(EventsGuard { events })
     }
@@ -223,6 +250,8 @@ impl Events {
             readable: ev.filter == libc::EVFILT_READ,
             writable: ev.filter == libc::EVFILT_WRITE
                 || (ev.filter == libc::EVFILT_READ && (ev.flags & libc::EV_EOF) != 0),
+            read_closed: ev.filter == libc::EVFILT_READ && (ev.flags & libc::EV_EOF) != 0,
+            write_closed: ev.filter == libc::EVFILT_WRITE && (ev.flags & libc::EV_EOF) != 0,
         })
     }
 }

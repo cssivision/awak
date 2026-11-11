@@ -22,14 +22,43 @@ const TS_ZERO: libc::timespec = libc::timespec {
     tv_nsec: 0,
 };
 
-/// Epoll flags for all possible readability events.
+/// Epoll flags that make a descriptor count as readable.
+///
+/// `EPOLLHUP` and `EPOLLERR` are included on purpose, matching `smol-rs/polling`
+/// (`IN | HUP | ERR | PRI`): a hung-up socket *is* readable in the sense that a
+/// read will return immediately (`0` or an error) instead of blocking. The
+/// alternative, what `mio` does, is to report `HUP` only through a separate
+/// `is_read_closed` and keep `is_readable` limited to `EPOLLIN`/`EPOLLPRI`.
+///
+/// The choice matters because an event carrying only `EPOLLHUP` still sets
+/// `ready` in the reactor, and `ready` is what `Source::poll_ready` returns.
+/// Keep that in mind if a source ever needs to distinguish "data to read" from
+/// "the peer went away"; for the current callers the read/write loop exits on
+/// either, so the distinction is not needed.
 fn read_flags() -> libc::c_int {
     libc::EPOLLIN | libc::EPOLLRDHUP | libc::EPOLLHUP | libc::EPOLLERR | libc::EPOLLPRI
 }
 
-/// Epoll flags for all possible writability events.
+/// Epoll flags that make a descriptor count as writable.
+///
+/// `HUP`/`ERR` are here for the same reason as in [`read_flags`]: a write to a
+/// dead socket fails immediately rather than blocking.
 fn write_flags() -> libc::c_int {
     libc::EPOLLOUT | libc::EPOLLHUP | libc::EPOLLERR
+}
+
+/// How readiness is reported for descriptors registered by the reactor.
+///
+/// By default registrations are one-shot: the kernel reports an event once and
+/// the reactor re-arms the descriptor when a task asks for readiness again.
+/// With the `edge-triggered` feature the descriptor stays registered and the
+/// kernel only reports transitions from "not ready" to "ready".
+fn mode_flags() -> libc::c_int {
+    if cfg!(feature = "edge-triggered") {
+        libc::EPOLLET
+    } else {
+        libc::EPOLLONESHOT
+    }
 }
 
 impl Reactor {
@@ -48,14 +77,17 @@ impl Reactor {
             timer_fd,
             events: Mutex::new(Events::new()),
         };
-        reactor.insert(event_fd)?;
-        reactor.insert(timer_fd)?;
+        // The internal fds only ever produce notification events, so they are
+        // registered under `NOTIFY_KEY` from the start.
+        reactor.insert(event_fd, NOTIFY_KEY)?;
+        reactor.insert(timer_fd, NOTIFY_KEY)?;
         reactor.interest(event_fd, NOTIFY_KEY, true, false)?;
+        reactor.interest(timer_fd, NOTIFY_KEY, true, false)?;
         Ok(reactor)
     }
 
     pub fn interest(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-        let mut flags = libc::EPOLLONESHOT;
+        let mut flags = mode_flags();
         if read {
             flags |= read_flags();
         }
@@ -70,12 +102,24 @@ impl Reactor {
         Ok(())
     }
 
-    pub fn insert(&self, fd: RawFd) -> io::Result<()> {
+    /// Registers `fd` under `key`.
+    ///
+    /// The key has to be correct here, not later. `EPOLL_CTL_ADD` is the first
+    /// thing the kernel knows about this descriptor, and any event it reports
+    /// before the next `EPOLL_CTL_MOD` is attributed to whatever `Source` owns
+    /// `key`. Registering with a placeholder and fixing it in `interest` leaves
+    /// a window where another descriptor's event lands on the wrong source;
+    /// with edge-triggered registrations that window lasts until the first poll,
+    /// and a peer reset inside it reports `EPOLLHUP`/`EPOLLERR` (which are not
+    /// masked by the interest bits) against an unrelated `Source`.
+    ///
+    /// See `bugs/edge-triggered-accept-spin.md`.
+    pub fn insert(&self, fd: RawFd, key: usize) -> io::Result<()> {
         let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
         syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
         let mut ev = libc::epoll_event {
-            events: libc::EPOLLONESHOT as _,
-            u64: 0u64,
+            events: mode_flags() as _,
+            u64: key as u64,
         };
         syscall!(epoll_ctl(self.epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut ev))?;
         Ok(())
@@ -104,6 +148,7 @@ impl Reactor {
             },
         };
         syscall!(timerfd_settime(self.timer_fd, 0, &new_val, ptr::null_mut()))?;
+        #[cfg(not(feature = "edge-triggered"))]
         self.interest(self.timer_fd, NOTIFY_KEY, true, false)?;
         // Timeout in milliseconds for epoll.
         let timeout_ms = if timeout == Some(Duration::from_secs(0)) {
@@ -126,6 +171,15 @@ impl Reactor {
             &mut buf[0] as *mut u8 as *mut libc::c_void,
             buf.len()
         ));
+        // Drain the timer as well: edge-triggered readiness only fires when
+        // the expiration counter goes from zero to non-zero again.
+        #[cfg(feature = "edge-triggered")]
+        let _ = syscall!(read(
+            self.timer_fd,
+            &mut buf[0] as *mut u8 as *mut libc::c_void,
+            buf.len()
+        ));
+        #[cfg(not(feature = "edge-triggered"))]
         self.interest(self.event_fd, NOTIFY_KEY, true, false)?;
         Ok(EventsGuard { events })
     }
@@ -183,10 +237,15 @@ impl Events {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
-        self.list[..self.len].iter().map(|ev| Event {
-            key: ev.u64 as usize,
-            readable: (ev.events as libc::c_int & read_flags()) != 0,
-            writable: (ev.events as libc::c_int & write_flags()) != 0,
+        self.list[..self.len].iter().map(|ev| {
+            let flags = ev.events as libc::c_int;
+            Event {
+                key: ev.u64 as usize,
+                readable: (flags & read_flags()) != 0,
+                writable: (flags & write_flags()) != 0,
+                read_closed: (flags & (libc::EPOLLHUP | libc::EPOLLERR | libc::EPOLLRDHUP)) != 0,
+                write_closed: (flags & (libc::EPOLLHUP | libc::EPOLLERR)) != 0,
+            }
         })
     }
 }

@@ -58,12 +58,17 @@ impl<T> Async<T> {
 
     pub async fn read_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_readable(tick);
+                    }
+                }
                 res => return res,
             }
-            self.source.readable().await?;
+            tick = Some(self.source.readable_tick().await?);
         }
     }
 
@@ -73,12 +78,17 @@ impl<T> Async<T> {
         op: impl FnMut(&T) -> io::Result<R>,
     ) -> Poll<io::Result<R>> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_readable(tick);
+                    }
+                }
                 res => return Poll::Ready(res),
             }
-            ready!(self.source.poll_readable(cx))?;
+            tick = Some(ready!(self.source.poll_readable_tick(cx))?);
         }
     }
 
@@ -87,12 +97,17 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_readable(tick);
+                    }
+                }
                 res => return res,
             }
-            self.source.readable().await?;
+            tick = Some(self.source.readable_tick().await?);
         }
     }
 
@@ -102,23 +117,33 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> Poll<io::Result<R>> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_readable(tick);
+                    }
+                }
                 res => return Poll::Ready(res),
             }
-            ready!(self.source.poll_readable(cx))?;
+            tick = Some(ready!(self.source.poll_readable_tick(cx))?);
         }
     }
 
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_writable(tick);
+                    }
+                }
                 res => return res,
             }
-            self.source.writable().await?;
+            tick = Some(self.source.writable_tick().await?);
         }
     }
 
@@ -128,12 +153,17 @@ impl<T> Async<T> {
         op: impl FnMut(&T) -> io::Result<R>,
     ) -> Poll<io::Result<R>> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_writable(tick);
+                    }
+                }
                 res => return Poll::Ready(res),
             }
-            ready!(self.source.poll_writable(cx))?;
+            tick = Some(ready!(self.source.poll_writable_tick(cx))?);
         }
     }
 
@@ -142,12 +172,17 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_writable(tick);
+                    }
+                }
                 res => return res,
             }
-            self.source.writable().await?;
+            tick = Some(self.source.writable_tick().await?);
         }
     }
 
@@ -157,12 +192,17 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> Poll<io::Result<R>> {
         let mut op = op;
+        let mut tick = None;
         loop {
             match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if let Some(tick) = tick.take() {
+                        self.source.clear_writable(tick);
+                    }
+                }
                 res => return Poll::Ready(res),
             }
-            ready!(self.source.poll_writable(cx))?;
+            tick = Some(ready!(self.source.poll_writable_tick(cx))?);
         }
     }
 }

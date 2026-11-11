@@ -34,7 +34,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --verbose
+        # Build both configurations so a feature-only path cannot rot unnoticed.
+        run: cargo build --all-features --verbose
 
       - name: Test
         run: cargo test --verbose
@@ -45,8 +46,20 @@ jobs:
         # trigger when optimizations are on, so run them in release too.
         run: cargo test --release --verbose
 
+      - name: Test (edge-triggered, debug)
+        # The edge-triggered poller uses different kernel flags (`EPOLLET` /
+        # `EV_CLEAR`) and keeps readiness state across polls, so it gets its own
+        # runs. Debug matters here: overflow checks and `debug_assert` are only
+        # compiled in without optimizations.
+        run: cargo test --features edge-triggered --verbose
+
+      - name: Test (edge-triggered, release)
+        run: cargo test --release --features edge-triggered --verbose
+
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        # `--all-targets` includes tests, examples and benches, which the plain
+        # `cargo clippy` invocation does not lint.
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   fmt:
     name: fmt

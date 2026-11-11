@@ -1,12 +1,18 @@
 [package]
 name = "awak"
-version = "0.2.40"
+version = "0.2.41"
 authors = ["cssivision <cssivision@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cssivision/awak"
 homepage = "https://github.com/cssivision/awak"
 description = "A small async runtime for Rust"
 edition = "2018"
+
+[features]
+default = []
+# Report readiness with edge-triggered semantics (`EPOLLET` on Linux/Android,
+# `EV_CLEAR` on macOS/BSD) instead of one-shot registrations.
+edge-triggered = []
 
 [dependencies]
 async-task = "4.7"

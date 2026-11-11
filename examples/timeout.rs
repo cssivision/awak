@@ -11,8 +11,10 @@ fn main() -> io::Result<()> {
             Ok(stream) => match stream {
                 Ok(mut stream) => {
                     let mut buf = vec![0; 10];
-                    let n = stream.read_exact(&mut buf).await?;
-                    println!("read {:?} bytes", n);
+                    // `read_exact` fills the whole buffer or fails; it does not
+                    // report how many bytes it read, so report the buffer size.
+                    stream.read_exact(&mut buf).await?;
+                    println!("read {:?} bytes: {:?}", buf.len(), buf);
                 }
                 Err(e) => {
                     println!("connect err: {:?}", e);

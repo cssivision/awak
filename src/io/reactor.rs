@@ -169,23 +169,30 @@ impl Reactor {
                         let mut states = source.states.lock().unwrap();
 
                         // Wake readers if a readability event was emitted.
+                        //
+                        // `closed` is a latch: once a hangup or error is seen
+                        // this direction reports ready from then on, and nothing
+                        // clears it. That matches Tokio's `READ_CLOSED`, which
+                        // `clear_readiness` deliberately preserves as a final
+                        // state, and it is safe because the caller's read loop
+                        // exits on the EOF/error that follows. The hazard is
+                        // only that a `closed` set on the *wrong* source turns a
+                        // spurious wake-up into a spin -- see
+                        // `bugs/edge-triggered-accept-spin.md` and the key
+                        // handling in `Poller::insert`.
                         if ev.readable {
-                            states[READ].tick = tick + 1;
-                            wakers.append(&mut states[READ].wakers);
+                            states.dirs[READ].tick = tick;
+                            states.dirs[READ].ready = true;
+                            states.dirs[READ].closed |= ev.read_closed;
+                            wakers.append(&mut states.dirs[READ].wakers);
                         }
 
                         // Wake writers if a writability event was emitted.
                         if ev.writable {
-                            states[WRITE].tick = tick + 1;
-                            wakers.append(&mut states[WRITE].wakers);
-                        }
-                        if !(states[WRITE].wakers.is_empty() && states[READ].wakers.is_empty()) {
-                            self.poller.interest(
-                                source.raw,
-                                source.key,
-                                !states[READ].wakers.is_empty(),
-                                !states[WRITE].wakers.is_empty(),
-                            )?;
+                            states.dirs[WRITE].tick = tick;
+                            states.dirs[WRITE].ready = true;
+                            states.dirs[WRITE].closed |= ev.write_closed;
+                            wakers.append(&mut states.dirs[WRITE].wakers);
                         }
                     }
                 }
@@ -209,10 +216,13 @@ impl Reactor {
     }
 
     pub fn insert_io(&self, raw: RawFd) -> io::Result<Arc<Source>> {
-        self.poller.insert(raw)?;
         let mut sources = self.sources.lock().unwrap();
+        // Reserve the slab key before registering: the poller needs it, and a
+        // descriptor registered under a placeholder key would have its events
+        // attributed to whichever source owns key 0 until the first re-arm.
         let entry = sources.vacant_entry();
         let key = entry.key();
+        self.poller.insert(raw, key)?;
         let source = Arc::new(Source {
             raw,
             key,
@@ -313,7 +323,16 @@ pub(crate) struct Source {
     /// The key of this source obtained during registration.
     key: usize,
     /// Tasks interested in events on this source.
-    states: Mutex<[State; 2]>,
+    states: Mutex<States>,
+}
+
+#[derive(Default, Debug)]
+struct States {
+    /// Readiness state for the read and write directions.
+    dirs: [State; 2],
+    /// Whether an edge-triggered registration is already armed.
+    #[cfg(feature = "edge-triggered")]
+    armed: bool,
 }
 
 #[derive(Default, Debug)]
@@ -322,54 +341,106 @@ struct State {
     wakers: Vec<Waker>,
     /// Last reactor tick that delivered an event.
     tick: usize,
-    /// Ticks remembered by `poll_readable()` or `poll_writable()`.
-    ticks: Option<(usize, usize)>,
+    /// Whether an event has been delivered and not consumed yet.
+    ready: bool,
+    /// Whether the source has been closed in this direction.
+    closed: bool,
 }
 
 impl Source {
     pub async fn readable(&self) -> io::Result<()> {
-        poll_fn(|cx| self.poll_ready(READ, cx)).await
+        self.readable_tick().await.map(|_| ())
     }
 
     pub async fn writable(&self) -> io::Result<()> {
+        self.writable_tick().await.map(|_| ())
+    }
+
+    /// Waits until the source is readable and returns the readiness tick.
+    pub async fn readable_tick(&self) -> io::Result<usize> {
+        poll_fn(|cx| self.poll_ready(READ, cx)).await
+    }
+
+    /// Waits until the source is writable and returns the readiness tick.
+    pub async fn writable_tick(&self) -> io::Result<usize> {
         poll_fn(|cx| self.poll_ready(WRITE, cx)).await
     }
 
-    pub fn poll_readable(&self, cx: &Context) -> Poll<io::Result<()>> {
+    pub fn poll_readable_tick(&self, cx: &Context) -> Poll<io::Result<usize>> {
         self.poll_ready(READ, cx)
     }
 
-    pub fn poll_writable(&self, cx: &Context) -> Poll<io::Result<()>> {
+    pub fn poll_writable_tick(&self, cx: &Context) -> Poll<io::Result<usize>> {
         self.poll_ready(WRITE, cx)
     }
 
-    pub fn poll_ready(&self, op: usize, cx: &Context) -> Poll<io::Result<()>> {
+    /// Clears the readiness bit for `op` unless a newer event has arrived.
+    ///
+    /// The `tick` comparison is what makes this safe under edge-triggered
+    /// polling: the caller clears the bit it consumed, and if a newer event has
+    /// landed in the meantime the tick no longer matches and the fresh
+    /// readiness survives. Without it a late clear would erase an edge that
+    /// nobody has read yet, and the source would go quiet with data pending.
+    ///
+    /// `closed` is deliberately left alone; see the comment in `react`.
+    pub fn clear_ready(&self, op: usize, tick: usize) {
         let mut states = self.states.lock().unwrap();
-        if let Some((a, b)) = states[op].ticks {
-            if states[op].tick != a && states[op].tick != b {
-                states[op].ticks = None;
-                return Poll::Ready(Ok(()));
-            }
+        let state = &mut states.dirs[op];
+        if state.tick == tick {
+            state.ready = false;
         }
-        let was_empty = states[op].wakers.is_empty();
-        if states[op].wakers.iter().all(|w| !w.will_wake(cx.waker())) {
-            states[op].wakers.push(cx.waker().clone());
+    }
+
+    pub fn clear_readable(&self, tick: usize) {
+        self.clear_ready(READ, tick);
+    }
+
+    pub fn clear_writable(&self, tick: usize) {
+        self.clear_ready(WRITE, tick);
+    }
+
+    pub fn poll_ready(&self, op: usize, cx: &Context) -> Poll<io::Result<usize>> {
+        let mut states = self.states.lock().unwrap();
+        if states.dirs[op].closed || states.dirs[op].ready {
+            return Poll::Ready(Ok(states.dirs[op].tick));
         }
-        if states[op].ticks.is_none() {
-            states[op].ticks = Some((
-                Reactor::get().ticker.load(Ordering::SeqCst),
-                states[op].tick,
-            ));
+
+        #[cfg(not(feature = "edge-triggered"))]
+        let was_empty = states.dirs[op].wakers.is_empty();
+
+        if states.dirs[op]
+            .wakers
+            .iter()
+            .all(|w| !w.will_wake(cx.waker()))
+        {
+            states.dirs[op].wakers.push(cx.waker().clone());
         }
+
+        #[cfg(feature = "edge-triggered")]
+        if !states.armed {
+            // Edge-triggered registrations stay armed for the lifetime of the
+            // source, so events keep flowing without further `epoll_ctl` calls.
+            //
+            // This is the only place the key is written to the kernel for an
+            // edge-triggered source, which is why `Poller::insert` must get it
+            // right up front: between `insert` and this call the descriptor is
+            // addressed with whatever `insert` used, and a peer reset in that
+            // window reports `HUP`/`ERR` against that key.
+            Reactor::get().interest(self.raw, self.key, true, true)?;
+            states.armed = true;
+        }
+
+        #[cfg(not(feature = "edge-triggered"))]
         if was_empty {
-            // no wakers, register in reactor
+            // One-shot registrations must be re-armed on every wait.
             Reactor::get().interest(
                 self.raw,
                 self.key,
-                !states[READ].wakers.is_empty(),
-                !states[WRITE].wakers.is_empty(),
+                !states.dirs[READ].wakers.is_empty(),
+                !states.dirs[WRITE].wakers.is_empty(),
             )?;
         }
+
         Poll::Pending
     }
 }
