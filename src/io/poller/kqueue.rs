@@ -52,7 +52,14 @@ impl Reactor {
         Ok(reactor)
     }
 
-    pub fn insert(&self, fd: RawFd) -> io::Result<()> {
+    /// Makes `fd` non-blocking.
+    ///
+    /// kqueue registers a descriptor on the first `kevent` for it, and that call
+    /// already carries the right `udata`, so there is no key to pass here. The
+    /// parameter is accepted to keep the signature in step with epoll, where the
+    /// key must be known at insert time.
+    pub fn insert(&self, fd: RawFd, key: usize) -> io::Result<()> {
+        let _ = key;
         let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
         syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK))?;
         Ok(())

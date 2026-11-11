@@ -85,8 +85,13 @@ impl Poller {
         self.reactor.remove(fd)
     }
 
-    pub fn insert(&self, fd: RawFd) -> io::Result<()> {
-        self.reactor.insert(fd)
+    /// Registers `fd` under `key`.
+    ///
+    /// The key has to be known up front: registering with a placeholder and
+    /// fixing it later leaves a window where the kernel reports this
+    /// descriptor's events under someone else's key.
+    pub fn insert(&self, fd: RawFd, key: usize) -> io::Result<()> {
+        self.reactor.insert(fd, key)
     }
 
     pub fn interest(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {

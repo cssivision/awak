@@ -169,6 +169,17 @@ impl Reactor {
                         let mut states = source.states.lock().unwrap();
 
                         // Wake readers if a readability event was emitted.
+                        //
+                        // `closed` is a latch: once a hangup or error is seen
+                        // this direction reports ready from then on, and nothing
+                        // clears it. That matches Tokio's `READ_CLOSED`, which
+                        // `clear_readiness` deliberately preserves as a final
+                        // state, and it is safe because the caller's read loop
+                        // exits on the EOF/error that follows. The hazard is
+                        // only that a `closed` set on the *wrong* source turns a
+                        // spurious wake-up into a spin -- see
+                        // `bugs/edge-triggered-accept-spin.md` and the key
+                        // handling in `Poller::insert`.
                         if ev.readable {
                             states.dirs[READ].tick = tick;
                             states.dirs[READ].ready = true;
@@ -205,10 +216,13 @@ impl Reactor {
     }
 
     pub fn insert_io(&self, raw: RawFd) -> io::Result<Arc<Source>> {
-        self.poller.insert(raw)?;
         let mut sources = self.sources.lock().unwrap();
+        // Reserve the slab key before registering: the poller needs it, and a
+        // descriptor registered under a placeholder key would have its events
+        // attributed to whichever source owns key 0 until the first re-arm.
         let entry = sources.vacant_entry();
         let key = entry.key();
+        self.poller.insert(raw, key)?;
         let source = Arc::new(Source {
             raw,
             key,
@@ -361,6 +375,14 @@ impl Source {
     }
 
     /// Clears the readiness bit for `op` unless a newer event has arrived.
+    ///
+    /// The `tick` comparison is what makes this safe under edge-triggered
+    /// polling: the caller clears the bit it consumed, and if a newer event has
+    /// landed in the meantime the tick no longer matches and the fresh
+    /// readiness survives. Without it a late clear would erase an edge that
+    /// nobody has read yet, and the source would go quiet with data pending.
+    ///
+    /// `closed` is deliberately left alone; see the comment in `react`.
     pub fn clear_ready(&self, op: usize, tick: usize) {
         let mut states = self.states.lock().unwrap();
         let state = &mut states.dirs[op];
@@ -398,6 +420,12 @@ impl Source {
         if !states.armed {
             // Edge-triggered registrations stay armed for the lifetime of the
             // source, so events keep flowing without further `epoll_ctl` calls.
+            //
+            // This is the only place the key is written to the kernel for an
+            // edge-triggered source, which is why `Poller::insert` must get it
+            // right up front: between `insert` and this call the descriptor is
+            // addressed with whatever `insert` used, and a peer reset in that
+            // window reports `HUP`/`ERR` against that key.
             Reactor::get().interest(self.raw, self.key, true, true)?;
             states.armed = true;
         }
