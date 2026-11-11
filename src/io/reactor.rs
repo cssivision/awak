@@ -171,15 +171,11 @@ impl Reactor {
                         // Wake readers if a readability event was emitted.
                         //
                         // `closed` is a latch: once a hangup or error is seen
-                        // this direction reports ready from then on, and nothing
-                        // clears it. That matches Tokio's `READ_CLOSED`, which
-                        // `clear_readiness` deliberately preserves as a final
-                        // state, and it is safe because the caller's read loop
-                        // exits on the EOF/error that follows. The hazard is
-                        // only that a `closed` set on the *wrong* source turns a
-                        // spurious wake-up into a spin -- see
-                        // `bugs/edge-triggered-accept-spin.md` and the key
-                        // handling in `Poller::insert`.
+                        // the direction is finished and nothing clears it, which
+                        // matches Tokio's `READ_CLOSED` (its `clear_readiness`
+                        // preserves closed states as final). It deliberately does
+                        // *not* let `poll_ready` short-circuit -- see the comment
+                        // there and `bugs/closed-latch-read-spin.md`.
                         if ev.readable {
                             states.dirs[READ].tick = tick;
                             states.dirs[READ].ready = true;
@@ -382,7 +378,9 @@ impl Source {
     /// readiness survives. Without it a late clear would erase an edge that
     /// nobody has read yet, and the source would go quiet with data pending.
     ///
-    /// `closed` is deliberately left alone; see the comment in `react`.
+    /// `closed` is deliberately left alone: a finished direction stays finished.
+    /// It does not make `poll_ready` report ready on its own, so clearing it
+    /// would only lose the information that the direction is done.
     pub fn clear_ready(&self, op: usize, tick: usize) {
         let mut states = self.states.lock().unwrap();
         let state = &mut states.dirs[op];
@@ -401,7 +399,13 @@ impl Source {
 
     pub fn poll_ready(&self, op: usize, cx: &Context) -> Poll<io::Result<usize>> {
         let mut states = self.states.lock().unwrap();
-        if states.dirs[op].closed || states.dirs[op].ready {
+        // Only `ready` short-circuits. `closed` must not: it is a latch that
+        // nothing clears, so returning `Ready` for it would report a hung-up
+        // direction as readable forever, even with nothing to read. The caller
+        // would then loop on `recv` -> `WouldBlock` -> clear `ready` ->
+        // `poll_ready` -> `Ready`, without ever issuing a syscall. See
+        // `bugs/closed-latch-read-spin.md`.
+        if states.dirs[op].ready {
             return Poll::Ready(Ok(states.dirs[op].tick));
         }
 
