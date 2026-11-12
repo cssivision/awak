@@ -448,3 +448,151 @@ impl Source {
         Poll::Pending
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::Waker;
+
+    /// Builds a `Source` over a socketpair, registered with the reactor.
+    ///
+    /// The peer end is returned so the test can drive readiness by writing to or
+    /// shutting down the socket.
+    fn socketpair_source() -> (Arc<Source>, std::os::unix::net::UnixStream) {
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        a.set_nonblocking(true).unwrap();
+        b.set_nonblocking(true).unwrap();
+        let raw = {
+            use std::os::unix::io::AsRawFd;
+            a.as_raw_fd()
+        };
+        let source = Reactor::get().insert_io(raw).expect("register source");
+        // Keep `a` alive for the lifetime of the test by leaking it; the
+        // `Source` in the reactor holds only the raw fd.
+        std::mem::forget(a);
+        (source, b)
+    }
+
+    /// A no-op waker; the test drives `poll_ready` directly.
+    fn noop_waker() -> Waker {
+        use std::task::{RawWaker, RawWakerVTable};
+        fn clone(_: *const ()) -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        fn noop(_: *const ()) {}
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+
+    /// `closed` alone must not make `poll_ready` report ready.
+    ///
+    /// This is the invariant `bugs/closed-latch-read-spin.md` is about. It is
+    /// checked on the state machine directly rather than by measuring throughput
+    /// under load, so it cannot flake and does not depend on machine speed.
+    ///
+    /// The regression it guards: `poll_ready` returned `Ready` when
+    /// `closed || ready`, so a hung-up direction reported ready forever even
+    /// after the caller cleared `ready`. The caller's read loop then spun on
+    /// `WouldBlock` without ever issuing a syscall.
+    ///
+    /// The invariant holds in both modes; the bug was only *reachable* with
+    /// `edge-triggered` because one-shot re-arms on every wait and so refreshes
+    /// the state before it can be observed.
+    #[test]
+    fn closed_without_ready_is_pending() {
+        let (source, _peer) = socketpair_source();
+        let waker = noop_waker();
+        let cx = Context::from_waker(&waker);
+
+        // Simulate what `react` does for a hangup: set `closed` but leave
+        // `ready` false, which is the state after the caller consumed the event
+        // and cleared the bit.
+        {
+            let mut states = source.states.lock().unwrap();
+            states.dirs[READ].closed = true;
+            states.dirs[READ].ready = false;
+        }
+
+        let polled = source.poll_ready(READ, &cx);
+        assert!(
+            matches!(polled, Poll::Pending),
+            "poll_ready reported {} for a closed direction with no pending \
+             readiness; the read loop will spin",
+            match polled {
+                Poll::Ready(_) => "Ready",
+                Poll::Pending => "Pending",
+            }
+        );
+    }
+
+    /// `ready` alone must still short-circuit.
+    #[test]
+    fn ready_is_reported_immediately() {
+        let (source, _peer) = socketpair_source();
+        let waker = noop_waker();
+        let cx = Context::from_waker(&waker);
+
+        {
+            let mut states = source.states.lock().unwrap();
+            states.dirs[READ].tick = 42;
+            states.dirs[READ].ready = true;
+        }
+
+        match source.poll_ready(READ, &cx) {
+            Poll::Ready(Ok(tick)) => assert_eq!(tick, 42, "wrong tick reported"),
+            _ => panic!("poll_ready should report ready when the bit is set"),
+        }
+    }
+
+    /// Clearing a stale tick must not erase a newer readiness.
+    #[test]
+    fn clear_ignores_a_stale_tick() {
+        let (source, _peer) = socketpair_source();
+
+        {
+            let mut states = source.states.lock().unwrap();
+            states.dirs[READ].tick = 7;
+            states.dirs[READ].ready = true;
+        }
+
+        // A late clear carrying an older tick must be ignored.
+        source.clear_readable(3);
+
+        let waker = noop_waker();
+        let cx = Context::from_waker(&waker);
+        assert!(
+            matches!(source.poll_ready(READ, &cx), Poll::Ready(_)),
+            "a stale clear erased newer readiness"
+        );
+
+        // The matching tick does clear it.
+        source.clear_readable(7);
+        {
+            let states = source.states.lock().unwrap();
+            assert!(!states.dirs[READ].ready, "matching clear did not apply");
+        }
+    }
+
+    /// `closed` survives a clear, since a finished direction stays finished.
+    #[test]
+    fn clear_leaves_closed_alone() {
+        let (source, _peer) = socketpair_source();
+
+        {
+            let mut states = source.states.lock().unwrap();
+            states.dirs[READ].tick = 5;
+            states.dirs[READ].ready = true;
+            states.dirs[READ].closed = true;
+        }
+        source.clear_readable(5);
+
+        let states = source.states.lock().unwrap();
+        assert!(!states.dirs[READ].ready, "ready should be cleared");
+        assert!(states.dirs[READ].closed, "closed should survive the clear");
+    }
+
+    // Keep the unused import warning away when the feature is off.
+    #[allow(dead_code)]
+    fn _unused(_: Pin<&mut ()>) {}
+}
