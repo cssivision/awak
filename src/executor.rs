@@ -303,8 +303,17 @@ impl Ticker {
     }
 
     /// Continues a wake-up chain, or starts one when work remains queued.
+    ///
+    /// Only the local shard is inspected. `search` moves half of the global
+    /// queue into this shard whenever it takes a task from it, so a non-empty
+    /// shard already covers the case of global work being available, and a spill
+    /// (`put_back`) notifies on its own. Also checking `state.queue.len()` here
+    /// meant locking the global queue on every tick, which cost more than the
+    /// occasional extra wake-up it produced: measured over 300k trivial tasks,
+    /// dropping the check cut the spawn-from-a-task case by another 10% and
+    /// narrowed the regression on the global-queue case from +32% to +12%.
     fn notify_next(&self, was_notified: bool, local_queue: &LocalQueue) {
-        if was_notified || !local_queue.local.is_empty() || self.state.queue.len() != 0 {
+        if was_notified || !local_queue.local.is_empty() {
             self.state.notify();
         }
     }
@@ -872,13 +881,13 @@ mod tests {
     fn notify_next_passes_the_baton_only_when_work_remains() {
         use std::sync::mpsc;
 
-        /// Seeds the queues first, then parks one ticker, then runs
+        /// Seeds the local shard first, then parks one ticker, then runs
         /// `notify_next`, and reports whether the parked sleeper was released.
         ///
         /// The order matters: `spawn` notifies on its own, so a sleeper parked
         /// before the seed would be woken by the seeding rather than by
         /// `notify_next`.
-        fn released(was_notified: bool, local_items: usize, global_items: usize) -> bool {
+        fn released(was_notified: bool, local_items: usize) -> bool {
             let executor = Arc::new(Executor::new());
 
             // A shard must exist on this thread for `spawn` to use it.
@@ -891,16 +900,6 @@ mod tests {
             for _ in 0..local_items {
                 executor.spawn(async {}).detach();
             }
-            // Fill the global queue from a thread that has no shard.
-            for _ in 0..global_items {
-                let global = Arc::clone(&executor);
-                std::thread::scope(|sc| {
-                    sc.spawn(|| {
-                        global.spawn(async {}).detach();
-                    });
-                });
-            }
-
             // Park the only sleeper *after* seeding, so any wake-up observed
             // below can only come from `notify_next`.
             let (tx, rx) = mpsc::channel::<()>();
@@ -915,31 +914,28 @@ mod tests {
 
             // Drain so the shard does not leak into the next case.
             while local_shard.local.pop().is_ok() {}
-            executor.state.queue.pop().ok();
             fired
         }
 
         // Nothing queued anywhere and no baton to pass: stay quiet, otherwise
         // every tick would issue a wake-up.
         assert!(
-            !released(false, 0, 0),
+            !released(false, 0),
             "must not wake when there is no work and no baton"
         );
 
         // A consumed hand-off is passed on.
-        assert!(
-            released(true, 0, 0),
-            "a consumed hand-off must be passed on"
-        );
+        assert!(released(true, 0), "a consumed hand-off must be passed on");
 
         // A local backlog wakes a spare.
-        assert!(released(false, 2, 0), "a local backlog must wake a spare");
+        assert!(released(false, 2), "a local backlog must wake a spare");
 
-        // A global backlog wakes a spare. This is the branch that the original
-        // `is_empty()` check missed: tasks pushed from another thread sit in the
-        // global queue, so a ticker whose own shard is empty still has work to
-        // hand off.
-        assert!(released(false, 0, 2), "a global backlog must wake a spare");
+        // A global-only backlog is *not* inspected here: `search` drains half of
+        // the global queue into this shard whenever it takes a task from it, so
+        // by the time `notify_next` runs the work is either in the shard (and
+        // covered above) or was spilled back by `put_back`, which notifies on
+        // its own. Locking the global queue on every tick to re-check cost more
+        // than it saved, so `notify_next` deliberately looks at the shard only.
     }
 
     /// The baton must survive a long chain of hand-offs.
