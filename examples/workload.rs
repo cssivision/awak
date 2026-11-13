@@ -41,7 +41,12 @@ fn peak_rss_kb() -> u64 {
     };
     for line in s.lines() {
         if let Some(rest) = line.strip_prefix("VmHWM:") {
-            return rest.split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+            return rest
+                .split_whitespace()
+                .next()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
         }
     }
     0
