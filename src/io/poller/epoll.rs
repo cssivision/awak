@@ -11,16 +11,8 @@ const NOTIFY_KEY: usize = usize::MAX;
 pub struct Reactor {
     epoll_fd: RawFd,
     event_fd: RawFd,
-    /// File descriptor for the timerfd that produces timeouts.
-    timer_fd: RawFd,
     events: Mutex<Events>,
 }
-
-/// `timespec` value that equals zero.
-const TS_ZERO: libc::timespec = libc::timespec {
-    tv_sec: 0,
-    tv_nsec: 0,
-};
 
 /// Epoll flags that make a descriptor count as readable.
 ///
@@ -67,22 +59,15 @@ impl Reactor {
         let flags = syscall!(fcntl(epoll_fd, libc::F_GETFD))?;
         syscall!(fcntl(epoll_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC))?;
         let event_fd = syscall!(eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK))?;
-        let timer_fd = syscall!(timerfd_create(
-            libc::CLOCK_MONOTONIC,
-            libc::TFD_CLOEXEC | libc::TFD_NONBLOCK
-        ))?;
         let reactor = Reactor {
             epoll_fd,
             event_fd,
-            timer_fd,
             events: Mutex::new(Events::new()),
         };
-        // The internal fds only ever produce notification events, so they are
+        // The event fd only ever produces notification events, so it is
         // registered under `NOTIFY_KEY` from the start.
         reactor.insert(event_fd, NOTIFY_KEY)?;
-        reactor.insert(timer_fd, NOTIFY_KEY)?;
         reactor.interest(event_fd, NOTIFY_KEY, true, false)?;
-        reactor.interest(timer_fd, NOTIFY_KEY, true, false)?;
         Ok(reactor)
     }
 
@@ -135,47 +120,30 @@ impl Reactor {
         Ok(())
     }
 
+    /// Blocks until an event arrives, a timeout expires, or the reactor is
+    /// notified.
+    ///
+    /// `epoll_wait` takes its timeout in whole milliseconds, so a sub-millisecond
+    /// deadline is rounded **up** rather than truncated. Truncating would turn a
+    /// 200us wait into a zero timeout -- a non-blocking poll -- and the reactor
+    /// would then spin until the deadline actually passed.
     pub fn wait(&self, timeout: Option<Duration>) -> io::Result<EventsGuard<'_>> {
         let mut events = self.events.lock().unwrap();
-        let new_val = libc::itimerspec {
-            it_interval: TS_ZERO,
-            it_value: match timeout {
-                None => TS_ZERO,
-                Some(t) => libc::timespec {
-                    tv_sec: t.as_secs() as libc::time_t,
-                    tv_nsec: t.subsec_nanos() as libc::c_long,
-                },
-            },
-        };
-        syscall!(timerfd_settime(self.timer_fd, 0, &new_val, ptr::null_mut()))?;
-        #[cfg(not(feature = "edge-triggered"))]
-        self.interest(self.timer_fd, NOTIFY_KEY, true, false)?;
-        // Timeout in milliseconds for epoll.
-        let timeout_ms = if timeout == Some(Duration::from_secs(0)) {
-            // This is a non-blocking call - use zero as the timeout.
-            0
-        } else {
-            // This is a blocking call - rely on timerfd to trigger the timeout.
-            -1
+        let timeout_ms = match timeout {
+            None => -1,
+            Some(t) if t.is_zero() => 0,
+            Some(t) => t.as_millis().clamp(1, i32::MAX as u128) as libc::c_int,
         };
         let res = syscall!(epoll_wait(
             self.epoll_fd,
             events.list.as_mut_ptr(),
             events.list.len() as libc::c_int,
-            timeout_ms as libc::c_int,
+            timeout_ms,
         ))?;
         events.len = res as usize;
         let mut buf = [0u8; 8];
         let _ = syscall!(read(
             self.event_fd,
-            &mut buf[0] as *mut u8 as *mut libc::c_void,
-            buf.len()
-        ));
-        // Drain the timer as well: edge-triggered readiness only fires when
-        // the expiration counter goes from zero to non-zero again.
-        #[cfg(feature = "edge-triggered")]
-        let _ = syscall!(read(
-            self.timer_fd,
             &mut buf[0] as *mut u8 as *mut libc::c_void,
             buf.len()
         ));
@@ -198,10 +166,8 @@ impl Reactor {
 impl Drop for Reactor {
     fn drop(&mut self) {
         let _ = self.remove(self.event_fd);
-        let _ = self.remove(self.timer_fd);
         let _ = syscall!(close(self.event_fd));
         let _ = syscall!(close(self.epoll_fd));
-        let _ = syscall!(close(self.timer_fd));
     }
 }
 
