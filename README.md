@@ -32,3 +32,20 @@ directly and then performs a single syscall should still be prepared to retry on
 [dependencies]
 awak = { version = "0.2", features = ["edge-triggered"] }
 ```
+
+## IPv6
+
+TCP and UDP sockets use `std::net`'s `ToSocketAddrs` uniformly, so IPv6 works
+the same way it does in `std`:
+
+- `TcpListener::bind` and `TcpStream::connect` accept IPv6 literals, either as
+  `SocketAddr` values or as bracketed strings such as `"[::1]:8080"`.
+- `TcpStream::connect` tries every address returned by resolution, so a
+  hostname with both `A` and `AAAA` records falls back to the other family if
+  one is unreachable.
+- Binding a listener to `[::]` uses the platform default for `IPV6_V6ONLY`
+  (dual-stack on Linux and macOS, IPv6-only on Windows); bind `0.0.0.0` for an
+  IPv4-only listener.
+
+`tests/ipv6.rs` covers a TCP echo round trip on `::1`, connecting through a
+bracketed address string, and a UDP round trip on `::1`.
