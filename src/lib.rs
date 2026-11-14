@@ -23,7 +23,12 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
         static EXECUTOR: OnceLock<Executor> = OnceLock::new();
 
         EXECUTOR.get_or_init(|| {
-            for _ in 0..thread::available_parallelism().unwrap().get().max(1) {
+            let workers = std::env::var("AWAK_WORKERS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or_else(|| thread::available_parallelism().unwrap().get())
+                .max(1);
+            for _ in 0..workers {
                 thread::spawn(|| loop {
                     let _ = catch_unwind(|| {
                         block_on(global().ticker().run());
