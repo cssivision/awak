@@ -190,6 +190,23 @@ impl Reactor {
                             states.dirs[WRITE].closed |= ev.write_closed;
                             wakers.append(&mut states.dirs[WRITE].wakers);
                         }
+
+                        // A one-shot registration is disarmed by the kernel as
+                        // soon as *any* event for this descriptor is delivered.
+                        // The direction that got the event above has its
+                        // readiness bit set, so it is covered, but waiters on
+                        // the other direction are still parked in `wakers`.
+                        // Re-arm the descriptor for them or they would never be
+                        // woken again (their `poll_ready` sees a non-empty
+                        // `wakers` list and therefore skips `interest`).
+                        #[cfg(not(feature = "edge-triggered"))]
+                        {
+                            let read_waiting = !states.dirs[READ].wakers.is_empty();
+                            let write_waiting = !states.dirs[WRITE].wakers.is_empty();
+                            if read_waiting || write_waiting {
+                                self.interest(source.raw, source.key, read_waiting, write_waiting)?;
+                            }
+                        }
                     }
                 }
                 Ok(())
@@ -453,6 +470,8 @@ impl Source {
 mod tests {
     use super::*;
     use std::pin::Pin;
+    #[cfg(not(feature = "edge-triggered"))]
+    use std::sync::atomic::AtomicBool;
     use std::task::Waker;
 
     /// Builds a `Source` over a socketpair, registered with the reactor.
@@ -595,4 +614,97 @@ mod tests {
     // Keep the unused import warning away when the feature is off.
     #[allow(dead_code)]
     fn _unused(_: Pin<&mut ()>) {}
+    /// A waker that records whether it was woken.
+    #[cfg(not(feature = "edge-triggered"))]
+    struct Flag(AtomicBool);
+
+    #[cfg(not(feature = "edge-triggered"))]
+    impl std::task::Wake for Flag {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(not(feature = "edge-triggered"))]
+    fn wait_for(flag: &Arc<Flag>, timeout: Duration, what: &str) {
+        let deadline = Instant::now() + timeout;
+        while !flag.0.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(flag.0.load(Ordering::SeqCst), "{} was never woken", what);
+    }
+
+    /// A writer parked behind a full send buffer must still be woken when a
+    /// read event arrives.
+    ///
+    /// With a one-shot registration the kernel disarms the *whole* descriptor
+    /// when it reports any event. `react` sets the readiness bit for the
+    /// direction in the event and drains its wakers, but a waiter on the other
+    /// direction is left in `wakers`; unless the descriptor is re-armed for
+    /// that direction, it waits forever. This is the 0.2.41 regression: the
+    /// readiness-bit rework removed the per-event re-arm.
+    #[test]
+    #[cfg(not(feature = "edge-triggered"))]
+    fn one_shot_rearms_a_writer_parked_behind_a_read_event() {
+        let (source, mut peer) = socketpair_source();
+
+        // Shrink the send buffer, then fill it so the write direction is not
+        // ready. (`source` keeps the descriptor registered.)
+        let sndbuf: libc::c_int = 4096;
+        unsafe {
+            libc::setsockopt(
+                source.raw,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+        let chunk = [0u8; 4096];
+        loop {
+            let n = unsafe {
+                libc::write(
+                    source.raw,
+                    chunk.as_ptr() as *const libc::c_void,
+                    chunk.len(),
+                )
+            };
+            if n < 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() == io::ErrorKind::WouldBlock {
+                    break;
+                }
+                panic!("fill: {}", err);
+            }
+        }
+
+        let write_flag = Arc::new(Flag(AtomicBool::new(false)));
+        let read_flag = Arc::new(Flag(AtomicBool::new(false)));
+        let write_waker = Waker::from(write_flag.clone());
+        let read_waker = Waker::from(read_flag.clone());
+        let write_cx = Context::from_waker(&write_waker);
+        let read_cx = Context::from_waker(&read_waker);
+
+        assert!(source.poll_ready(WRITE, &write_cx).is_pending());
+        assert!(source.poll_ready(READ, &read_cx).is_pending());
+
+        // Deliver a read event while the writer is parked.
+        std::io::Write::write_all(&mut peer, b"x").unwrap();
+        wait_for(&read_flag, Duration::from_secs(2), "read waker");
+
+        // Free space in the send buffer; the parked writer must be woken.
+        let mut buf = [0u8; 16384];
+        loop {
+            match std::io::Read::read(&mut peer, &mut buf) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => panic!("drain: {}", err),
+            }
+        }
+        wait_for(&write_flag, Duration::from_secs(2), "write waker");
+    }
 }
