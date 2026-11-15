@@ -4,7 +4,6 @@ version = "0.2.44"
 authors = ["cssivision <cssivision@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cssivision/awak"
-homepage = "https://github.com/cssivision/awak"
 description = "A small async runtime for Rust"
 edition = "2018"
 
